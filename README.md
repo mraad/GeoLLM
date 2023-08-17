@@ -1,6 +1,6 @@
 # GeoLLM
 
-## Create Conda Env using [mamba](https://github.com/mamba-org/mamba)
+## Create Conda Env using [mamba](https://github.com/mamba-org/mamba).
 
 ```shell
 mamba update -n base -c conda-forge conda mamba
