@@ -4,6 +4,9 @@ channels:
   - conda-forge
 dependencies:
   - python<3.11
+  - python-multipart>=0.0.6
+  - fastapi>=0.101.1
+    fastapi-sessions>=0.3.2
   - jupyter>=1.0
   - jupyterlab>4.0
   - nodejs>16.14
