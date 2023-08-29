@@ -84,7 +84,7 @@ class GeoLLM:
         """
         self._spark = spark_session or SparkSession.builder.getOrCreate()
         if llm is None:
-            llm = ChatOpenAI(model_name="gpt-4", temperature=0)
+            llm = ChatOpenAI(model_name="gpt-4", temperature=0.01)
         self._llm = llm
         self._web_search_tool = web_search_tool or self._default_web_search_tool
         if enable_cache:
@@ -386,6 +386,7 @@ class GeoLLM:
 
         response = None
         loop_count = 0
+        print(f'select_tool() message: {instruction}')
 
         while response is None and loop_count < 3:
             response = self._tool_selection_llm_chain.run(
@@ -395,11 +396,13 @@ class GeoLLM:
             loop_count += 1
 
             if response is not None:
+                print(f'select_tool-> response: {response}')
                 for tool in tool_list:
                     if response.find(tool) != -1:
                         return tool
-            response = None  # try again
-        else:
+                response = None  # try again
+
+        if response is None:
             raise Exception("Could not find a tool fitting the description", "")
 
     def analyze_sample_data(self, data_samples: str, cache: bool = True) -> str | None:
@@ -412,6 +415,7 @@ class GeoLLM:
         """
         instruction = f"The purpose of the request: {data_samples}" if data_samples is not None else ""
         tags = self._get_tags(cache)
+        print(f'analyze_sample_data() message: {instruction}')
 
         response = None
         loop_count = 0
@@ -481,6 +485,9 @@ class GeoLLM:
         self.log(f"Creating temp view for the transform:\n{create_temp_view_code}")
         df.createOrReplaceTempView(temp_view_name)
         schema_str = self._get_df_schema(df)
+
+        print(f'transform_df() columns: {schema_str}\n desc: {desc}')
+
         tags = self._get_tags(cache)
         llm_result = self._transform_chain.run(
             tags=tags, view_name=temp_view_name, columns=schema_str, desc=desc

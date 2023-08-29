@@ -219,9 +219,9 @@ a list of candidate tools.
 "transform_df": applies a transformation to a provided PySpark DataFrame,
 the specifics of which are determined by the 'desc' parameter. 
 
-"create_geobins": performs geospatial binning function to create an aggregated data in geojson document. 
+"create_geo_bins": performs geospatial binning function to create an aggregated data in geojson document. 
 
-"plot_df_geobins": performs geospatial binning function and then plot the data in a live map. 
+"plot_df_geo_bins": performs geospatial binning function and then plot the data in a live map. 
 
 "analyze_s3_dataset": performs preliminary data analysis on a dataset from Amazon S3 data store. 
 
@@ -285,7 +285,7 @@ df.geometry = df.geometry.apply(lambda _: bytes(_))
 df.geometry = gp.GeoSeries.from_wkb(df.geometry)
 gdf = gp.GeoDataFrame(df, crs="EPSG:3857")
 geo_json = gdf.to_json()
-with open('../output/geo_bins.json', 'w') as f:
+with open('./geo_bins.json', 'w') as f:
     f.write(geo_json)
 """
 

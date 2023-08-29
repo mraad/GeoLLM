@@ -1,4 +1,6 @@
-
+##
+# pip install python-multipart
+#
 from pydantic import BaseModel
 from fastapi import HTTPException, FastAPI, Response, Depends, Form
 from uuid import UUID, uuid4
@@ -99,10 +101,10 @@ def create_geo_llm() -> GeoLLM:
     )
 
     llm = AzureChatOpenAI(
-        openai_api_base="https://azure-openai-personal-stylist.openai.azure.com/",
+        openai_api_base="https://esri-openai-dev.openai.azure.com",
         openai_api_version="2023-05-15",
-        deployment_name="gpt-35-turbo",
-        openai_api_key="d6b01920a9f64098994de5dc830b8a94",
+        deployment_name="esri-chatgpt-dev",
+        openai_api_key="974995b34b294be196324349ac32e5b2",
         openai_api_type="azure",
     )
 
