@@ -1,4 +1,3 @@
-from typing import List, Optional
 
 import pandas as pd  # noqa: F401
 
@@ -7,7 +6,7 @@ import io
 import os
 import re
 import json
-from typing import Callable
+
 from urllib.parse import urlparse
 import requests
 import tiktoken
@@ -19,16 +18,16 @@ from langchain.base_language import BaseLanguageModel
 from langchain.chat_models import ChatOpenAI
 
 from pyspark.sql import DataFrame, SparkSession
-from pyspark.sql.functions import col
+from pyspark.sql.functions import *
 
 from .ai_utils import AIUtils
 from .cache import Cache, LLMChainWithCache, SKIP_CACHE_TAGS, SearchToolWithCache
 from .code_logger import CodeLogger
 from .prompts import EXPLAIN_DF_PROMPT, PLOT_PROMPT, SEARCH_PROMPT, SQL_PROMPT
 from .prompts import TRANSFORM_PROMPT, UDF_PROMPT, VERIFY_PROMPT, DATA_ANALYSIS_PROMPT
-from .prompts import TOOL_SELECTION_PROMPT, GEOBINS_PLOT_PROMPT, CREATE_GEOBINS_PROMPT
+from .prompts import TOOL_SELECTION_PROMPT, GEOBINS_PLOT_PROMPT
+from .prompts import CREATE_GEOBINS_PROMPT, CREATE_GEO_BINS_PROMPT
 from .temp_view_utils import random_view_name, replace_view_name
-
 
 # AIUtils
 # Cache
@@ -49,6 +48,47 @@ from .temp_view_utils import random_view_name, replace_view_name
 # )
 # SearchToolWithCache
 # random_view_name, replace_view_name
+
+
+geo_function_templates = {
+    "create_geo_bins":
+        """
+import geofunctions as S
+import pyspark.sql.functions as F
+import geopandas as gp
+
+# this template requires following 5 variables to be included before executing
+# lon_column, lat_column, cell_size, max_count and output_file
+
+# Perform Spatial Binning
+df = (
+    df.select(S.st_lontoq(lon_column, cell_size), S.st_lattor(lat_column, cell_size))
+    .groupBy("q", "r")
+    .count()
+    .select(
+        S.st_qtox("q", cell_size),
+        S.st_rtoy("r", cell_size),
+        "count",
+    )
+    .select(
+        S.st_cell("x", "y", cell_size).alias("geometry"),
+        F.least("count", F.lit(max_count)).alias("count"),
+    )
+    .orderBy("count")
+)
+
+# Create geodataframe to get GeoJSON document
+df = df.toPandas()
+df.geometry = df.geometry.apply(lambda _: bytes(_))
+df.geometry = gp.GeoSeries.from_wkb(df.geometry)
+gdf = gp.GeoDataFrame(df, crs="EPSG:3857")
+geo_json = gdf.to_json()
+
+# Write GeoJSON document to local disk
+with open(output_file, 'w') as f:
+    f.write(geo_json)
+    """
+}
 
 
 class GeoLLM:
@@ -118,7 +158,8 @@ class GeoLLM:
         self._transform_chain = self._create_llm_chain(prompt=TRANSFORM_PROMPT)
         self._plot_chain = self._create_llm_chain(prompt=PLOT_PROMPT)
         self._geo_bins_plot_chain = self._create_llm_chain(prompt=GEOBINS_PLOT_PROMPT)
-        self._create_geo_bins_chain = self._create_llm_chain(prompt=CREATE_GEOBINS_PROMPT)
+        # self._create_geo_bins_chain = self._create_llm_chain(prompt=CREATE_GEOBINS_PROMPT)
+        self._create_geo_bins_chain = self._create_llm_chain(prompt=CREATE_GEO_BINS_PROMPT)
         self._verify_chain = self._create_llm_chain(prompt=VERIFY_PROMPT)
         self._udf_chain = self._create_llm_chain(prompt=UDF_PROMPT)
         self._verbose = verbose
@@ -564,7 +605,7 @@ class GeoLLM:
                     raise Exception("Could not evaluate Python code", e)
 
     def create_geo_bins(
-            self, df: DataFrame, desc: Optional[str] = None, cache: bool = True
+            self, df: DataFrame, output_file: str, desc: Optional[str] = None, cache: bool = True
     ) -> None:
         # assert DataFrame is not None
         if df is None:
@@ -587,8 +628,20 @@ class GeoLLM:
             self.log(response)
             codeblocks = self._extract_code_blocks(response)
             code = "\n".join(codeblocks)
+            print(code)
+            import json
+            code_json = json.loads(code)
+            python_code = ''
+            for item in code_json:
+                if type(code_json[item]) is str:
+                    python_code = f'{python_code}\n{item} = "{code_json[item]}"'
+                else:
+                    python_code = f'{python_code}\n{item} = {code_json[item]}'
+
+            python_code = f'{python_code}\noutput_file = "{output_file}"\n{geo_function_templates["create_geo_bins"]}'
+            print(python_code)
             try:
-                exec(compile(code, "create_geo_bins-CodeGen", "exec"))
+                exec(compile(python_code, "create_geo_bins-CodeGen", "exec"))
             except Exception as e:
                 self.log(code)
                 if loop_count < 3:

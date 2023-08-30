@@ -46,7 +46,8 @@ Given a Spark temp view `{view_name}` with the following columns:
 {columns}
 ```
 Write a Spark SQL query to retrieve: {desc}
-The answer MUST contain query only. Ensure your answer is correct.
+The answer MUST contain query only. Ensure your answer is correct. 
+List all columns in the SQL. 
 """
 
 TRANSFORM_PROMPT = PromptTemplate(
@@ -291,6 +292,23 @@ with open('./geo_bins.json', 'w') as f:
 
 CREATE_GEOBINS_PROMPT = PromptTemplate(
     input_variables=["columns", "explain", "instruction"], template=CREATE_GEOBINS_PROMPT_TEMPLATE
+)
+
+CREATE_GEO_BINS_PROMPT_TEMPLATE = """
+You are a specialist who are great at extract variables from a given message. 
+Extract the following variables from the instructions and make the output as a JSON such as,
+{{"lon_column": "col_lon", "lat_column":"col_lat", "cell_size":10, "max_count":10}}
+
+1. <lon_column> (the name of the longitude or X column)
+2. <lat_column> (the name of the latitude or Y column)
+3. <cell_size> (the size of the spatial bin cell)
+4. <max_count> (the maximum count of the spatial bin cell)
+
+{instruction}
+"""
+
+CREATE_GEO_BINS_PROMPT = PromptTemplate(
+    input_variables=["instruction"], template=CREATE_GEO_BINS_PROMPT_TEMPLATE
 )
 
 VERIFY_TEMPLATE = """

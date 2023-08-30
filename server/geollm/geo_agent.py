@@ -1,7 +1,9 @@
 import os
 import re
-from pyspark.sql import DataFrame
+import time
+import math
 
+from pyspark.sql import DataFrame
 from .geo_llm import GeoLLM
 
 
@@ -13,7 +15,7 @@ class GeoAgent:
         self._tools = ["transform_df", "create_geo_bins", "plot_df_geo_bins", "analyze_s3_dataset"]
 
     @staticmethod
-    def _extract_s3_url(desc: str) -> str:
+    def _extract_s3_url(desc: str) -> str | None:
         # Regular expression pattern for S3 URL extraction
         pattern = r's3a://[a-zA-Z0-9\-\.]+/[a-zA-Z0-9\-_\/\.]+'
         # Extract the S3 URL
@@ -29,6 +31,9 @@ class GeoAgent:
 
     def _quick_check_transformed_df(self, df: DataFrame) -> bool:
         # compare heads records of 2 DataFrames
+        if self._df is None:
+            return False
+
         head1 = self._df.take(1)[0]
         head2 = df.take(1)[0]
         for name, dtype in df.dtypes:
@@ -68,32 +73,33 @@ class GeoAgent:
                         self._df = df
                         return f'{{"success": "True", "error_msg":""}}'
                     else:
-                        return (f'{{"success": "False", "error_msg":"Could not transform the data. Please refine your '
-                                f'message and try again!"}}')
+                        return (f'{{"success": "False", "error_msg":"Could not transform the data. Quick check failed!'
+                                f' Please refine your message and try again!"}}')
                 except Exception as e:
-                    return (f'{{"success": "False", "error_msg":"Could not transform the data: {e}. Please refine your '
-                            f'message and try again!"}}')
+                    print(type(e))
+                    print(e)
+                    return (f'{{"success": "False", "error_msg":"Could not transform the data: {e}. '
+                            f'Please refine your message and try again!"}}')
 
             case 'create_geo_bins':
                 try:
-                    self._geo_llm.create_geo_bins(self._df, message)
-                    file_name = '../output/geo_bins.json'
-                    if not os.path.isfile(file_name):
-                        file_name = './geo_bins.json'
-                        if not os.path.isfile(file_name):
-                            return (f'{{"success": "False", "error_msg":"geo-binning data may have failed '
-                                    f'since there is no JSON output. Please refine your message and try again!"}}')
+                    ts = math.trunc(time.time())
+                    geojson_output_file = f'./geojson_output_{ts}.json'
+                    self._geo_llm.create_geo_bins(self._df, geojson_output_file, message)
+                    if not os.path.isfile(geojson_output_file):
+                        return (f'{{"success": "False", "error_msg":"geo-binning data may have failed '
+                                f'since there is no JSON output. Please refine your message and try again!"}}')
 
-                    with open(file_name, 'r') as f:
+                    with open(geojson_output_file, 'r') as f:
                         geojson = f.read()
                         print(len(geojson))
-                        print(geojson[0:500])
+                        print(geojson[0:500])  # print out few records
                         return geojson
 
                 except Exception as e:
-                    return (f'{{"success": "False", "error_msg":"Could not perform geo-binning the data: {e}. Please '
-                            f'refine your message and try again!"}}')
+                    return (f'{{"success": "False", "error_msg":"Could not perform geo-binning the data: {e}. '
+                            f'Please refine your message and try again!"}}')
 
             case _:
-                return (f'{{"success": "False", "error_msg":"Could not find a tool matching your description. Please '
-                        f'refine your message and try again!"}}')
+                return (f'{{"success": "False", "error_msg":"Could not find a tool matching your description. '
+                        f'Please refine your message and try again!"}}')
