@@ -82,6 +82,7 @@ df = df.toPandas()
 df.geometry = df.geometry.apply(lambda _: bytes(_))
 df.geometry = gp.GeoSeries.from_wkb(df.geometry)
 gdf = gp.GeoDataFrame(df, crs="EPSG:3857")
+gdf = gdf.to_crs(crs="EPSG:4326")
 geo_json = gdf.to_json()
 
 # Write GeoJSON document to local disk
@@ -124,7 +125,7 @@ class GeoLLM:
         """
         self._spark = spark_session or SparkSession.builder.getOrCreate()
         if llm is None:
-            llm = ChatOpenAI(model_name="gpt-4", temperature=0.01)
+            llm = ChatOpenAI(model_name="gpt-4", temperature=0.05)
         self._llm = llm
         self._web_search_tool = web_search_tool or self._default_web_search_tool
         if enable_cache:
@@ -489,7 +490,7 @@ class GeoLLM:
         except Exception as e:
             return None
 
-    def analyze_s3_dataset(self, df: DataFrame, number_samples: int = 5, cache: bool = True) -> str:
+    def analyze_s3_dataset(self, df: DataFrame, number_samples: int = 3, cache: bool = True) -> str:
         col_info_json = self._get_col_info_json(df.dtypes)
         samples_json = self._get_sample_data_json(df.take(number_samples))
 
@@ -501,8 +502,11 @@ class GeoLLM:
             response = ''
             error_msg = "Failed to get preliminary analysis results from LLM after 3 tries."
 
+        response = response.replace("\\n", "").replace('\\', '')
+        print(response)
+        print("================ analyze_s3_dataset above === ")
         return (f'{{"success":"{success}","error_msg":"{error_msg}","col_data_types":{col_info_json},'
-                f'"samples":{samples_json},"data_descriptions":"{response}"}}')
+                f'"samples":{samples_json},"col_descriptions":{response}}}')
 
     def transform_df(self, df: DataFrame, desc: str, cache: bool = True) -> DataFrame:
         """

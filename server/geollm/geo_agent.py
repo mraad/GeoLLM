@@ -2,6 +2,7 @@ import os
 import re
 import time
 import math
+import json
 
 from pyspark.sql import DataFrame
 from .geo_llm import GeoLLM
@@ -9,9 +10,10 @@ from .geo_llm import GeoLLM
 
 class GeoAgent:
 
-    def __init__(self, geo_llm: GeoLLM):
+    def __init__(self, geo_llm: GeoLLM, output_dir: str = "./"):
         self._df = None
         self._geo_llm = geo_llm
+        self._output_dir = output_dir
         self._tools = ["transform_df", "create_geo_bins", "plot_df_geo_bins", "analyze_s3_dataset"]
 
     @staticmethod
@@ -41,23 +43,40 @@ class GeoAgent:
                 return False
         return True
 
-    def chat(self, message: str) -> str:
+    def chat(self, message: str, server_url: str) -> str:
         tool = self._geo_llm.select_tool(message)
         print(tool)
         match tool:
             case 'analyze_s3_dataset':
                 s3_url = self._extract_s3_url(message)
                 if s3_url is None:
-                    return f'{{"success":"False", "error_msg":"Required s3 url is invalid: {s3_url}"}}'
+                    return f'{{"success":"False", "agent_message":"Required s3 url is invalid: {s3_url}"}}'
                 else:
                     print(s3_url)
                     df = self._geo_llm.create_s3_df(s3_url)
                     if df is None:
                         return \
-                            f'{{"success":"False", "error_msg":"Failed to load CSV data from the given url: {s3_url}"}}'
+                            (f'{{"success":"False", "agent_message": '
+                             f'"Failed to load CSV data from the given url: {s3_url}"}}')
                     else:
                         self._df = df
-                        return self._geo_llm.analyze_s3_dataset(df)
+                        response = self._geo_llm.analyze_s3_dataset(df)
+                        print(f'analyze_s3_dataset: {response}')
+                        response_json = json.loads(response)
+                        # to change JSON item quote from single to double
+                        col_names_types = json.dumps(response_json["col_data_types"])
+                        samples = json.dumps(response_json["samples"])
+                        col_descriptions = json.dumps(response_json["col_descriptions"])
+                        if response_json['success'] == 'True':
+                            message = (f'A PySpark Dataframe has been successfully created '
+                                       f'based on the given S3 data source: {s3_url}. '
+                                       f'Following is a brief description of each column and a few sample records.')
+                            return (f'{{"success":"True", "agent_message":"{message}",'
+                                    f'"column_descriptions":{col_descriptions},'
+                                    f'"column_data_types":{col_names_types},'
+                                    f'"samples":{samples}}}')
+                        else:
+                            return f'{{"success":"False", "agent_message":"{response_json["error_msg"]}"}}'
 
             case 'transform_df':
                 try:
@@ -71,35 +90,41 @@ class GeoAgent:
 
                     if quick_check and df is not None:
                         self._df = df
-                        return f'{{"success": "True", "error_msg":""}}'
+                        return (f'{{"success": "True", "agent_message":"Your request for transforming the data '
+                                f'has been successfully executed."}}')
                     else:
-                        return (f'{{"success": "False", "error_msg":"Could not transform the data. Quick check failed!'
+                        return (f'{{"success": "False", '
+                                f'"agent_message":"Could not transform the data. Quick check failed!'
                                 f' Please refine your message and try again!"}}')
                 except Exception as e:
                     print(type(e))
                     print(e)
-                    return (f'{{"success": "False", "error_msg":"Could not transform the data: {e}. '
+                    return (f'{{"success": "False", "agent_message":"Could not transform the data: {e}. '
                             f'Please refine your message and try again!"}}')
 
             case 'create_geo_bins':
                 try:
                     ts = math.trunc(time.time())
-                    geojson_output_file = f'./geojson_output_{ts}.json'
+                    file_name = f'geojson_{ts}.json'
+                    geojson_output_file = f'{self._output_dir}/{file_name}'
                     self._geo_llm.create_geo_bins(self._df, geojson_output_file, message)
                     if not os.path.isfile(geojson_output_file):
-                        return (f'{{"success": "False", "error_msg":"geo-binning data may have failed '
+                        return (f'{{"success": "False", "agent_message":"geo-binning data may have failed '
                                 f'since there is no JSON output. Please refine your message and try again!"}}')
 
-                    with open(geojson_output_file, 'r') as f:
-                        geojson = f.read()
-                        print(len(geojson))
-                        print(geojson[0:500])  # print out few records
-                        return geojson
+                    return (f'{{"success": "True", '
+                            f'"agent_message":"Your request for performing geo-binning has been successfully executed.",'
+                            f'"url":"{server_url}/output_data/{file_name}"}}')
+                    # with open(geojson_output_file, 'r') as f:
+                    #     geojson = f.read()
+                    #     print(len(geojson))
+                    #     print(geojson[0:500])  # print out few records
+                    #     return geojson
 
                 except Exception as e:
-                    return (f'{{"success": "False", "error_msg":"Could not perform geo-binning the data: {e}. '
+                    return (f'{{"success": "False", "agent_message":"Could not perform geo-binning the data: {e}. '
                             f'Please refine your message and try again!"}}')
 
             case _:
-                return (f'{{"success": "False", "error_msg":"Could not find a tool matching your description. '
+                return (f'{{"success": "False", "agent_message":"Could not find a tool matching your description. '
                         f'Please refine your message and try again!"}}')

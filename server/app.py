@@ -2,22 +2,25 @@
 # pip install python-multipart
 #
 from pydantic import BaseModel
-from fastapi import HTTPException, FastAPI, Response, Depends, Form
+from fastapi import HTTPException, FastAPI, Response, Depends, Form, Request
 from uuid import UUID, uuid4
 
 from fastapi_sessions.backends.implementations import InMemoryBackend
 from fastapi_sessions.session_verifier import SessionVerifier
 from fastapi_sessions.frontends.implementations import SessionCookie, CookieParameters
+from fastapi.responses import FileResponse
+from fastapi.middleware.cors import CORSMiddleware
 
 from geollm.geo_agent import GeoAgent
 from geollm.geo_llm import GeoLLM
 
 import glob
 import os
-from pyspark.sql import SparkSession
-from langchain.chat_models import AzureChatOpenAI
 import time
 from typing import Annotated
+
+from pyspark.sql import SparkSession
+from langchain.chat_models import AzureChatOpenAI
 
 
 class SessionData(BaseModel):
@@ -120,18 +123,30 @@ geoLLM = create_geo_llm()
 
 app = FastAPI()
 
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins="*",
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+TEMP_IMAGE_DIR = './output'
+
 
 @app.post("/chat/", dependencies=[Depends(cookie)])
-async def chat(message: Annotated[str, Form()], response: Response,
+async def chat(message: Annotated[str, Form()], response: Response, request: Request,
                session_id: UUID = Depends(cookie)
                ) -> str:
     agent = await get_geo_agent(session_id, response)
+    print(f'{request.url}')
     if agent:
         print(f'message from user: {message}')
         print(f'selected agent: {agent}, # of agents: {len(agent_cache)}')
-        return agent.chat(message)
+        server_url = f'{request.url}'
+        return agent.chat(message, server_url[0:server_url.index('/chat')])
     else:
-        return f'{{"success":"False", "error_msg":"No valid GeoAgent is available!"}}'
+        return f'{{"success":"False", "agent_message":"No valid GeoAgent is available!"}}'
 
 
 async def get_geo_agent(session_id: UUID, response: Response) -> GeoAgent:
@@ -155,7 +170,7 @@ async def get_geo_agent(session_id: UUID, response: Response) -> GeoAgent:
 
 
 async def create_agent_and_session(session_id: UUID, response: Response) -> GeoAgent:
-    agent = GeoAgent(geoLLM)
+    agent = GeoAgent(geoLLM, TEMP_IMAGE_DIR)
     agent_cache[session_id] = agent
     name = f'geo_agent_{time.time()}'
     data = SessionData(username=name)
@@ -200,4 +215,12 @@ async def del_session(response: Response, session_id: UUID = Depends(cookie)):
 
     cookie.delete_from_response(response)
     return "now you are ready to start a new session!"
+
+
+@app.get("/output_data/{name}", response_class=FileResponse)
+async def read_output_data(name: str):
+    file_path = f'{TEMP_IMAGE_DIR}/{name}'
+    print(file_path)
+    response = FileResponse(file_path, media_type="application/json")
+    return response
 

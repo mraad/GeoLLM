@@ -48,6 +48,7 @@ Given a Spark temp view `{view_name}` with the following columns:
 Write a Spark SQL query to retrieve: {desc}
 The answer MUST contain query only. Ensure your answer is correct. 
 List all columns in the SQL. 
+Use Spark functions whenever it is possible. 
 """
 
 TRANSFORM_PROMPT = PromptTemplate(
@@ -204,7 +205,10 @@ GEOBINS_PLOT_PROMPT = PromptTemplate(
 
 DATA_ANALYSIS_PROMPT_TEMPLATE = """
 You are Data Analyst who specializes data analysis. You will give detailed description for each 
-data columns with given sample dataset. 
+data columns with given sample dataset. Please generate report in a JSON format such as 
+{{"column_name1":"This column describes certain condition.", "column_name2":"Another column description"}}
+
+Do not include new line characters and unnecessary empty spaces! 
 
 {instruction}
 """
