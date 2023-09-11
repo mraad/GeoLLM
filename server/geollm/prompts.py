@@ -1,5 +1,6 @@
 from langchain import FewShotPromptTemplate
 from langchain.prompts.prompt import PromptTemplate
+from langchain.prompts import ChatPromptTemplate
 
 SEARCH_TEMPLATE = """Given a Query and a list of Google Search Results, return the link
 from a reputable website which contains the data set to answer the question. {columns}
@@ -46,9 +47,10 @@ Given a Spark temp view `{view_name}` with the following columns:
 {columns}
 ```
 Write a Spark SQL query to retrieve: {desc}
-The answer MUST contain query only. Ensure your answer is correct. 
-List all columns in the SQL. 
-Use Spark functions whenever it is possible. 
+### Rule1: The answer MUST contain query only. Ensure your answer is correct. 
+### Rule2: Must list all columns in the SQL. 
+### Rule3: Use Spark functions whenever it is possible. 
+### Rule4: Do not use any spatial functions. 
 """
 
 TRANSFORM_PROMPT = PromptTemplate(
@@ -205,10 +207,12 @@ GEOBINS_PLOT_PROMPT = PromptTemplate(
 
 DATA_ANALYSIS_PROMPT_TEMPLATE = """
 You are Data Analyst who specializes data analysis. You will give detailed description for each 
-data columns with given sample dataset. Please generate report in a JSON format such as 
-{{"column_name1":"This column describes certain condition.", "column_name2":"Another column description"}}
-
-Do not include new line characters and unnecessary empty spaces! 
+data columns based on the given sample records. \n
+Example: {{"ID": 10000, "ZipCode": 20030}} \n
+Output:  {{"ID":"This column gives an identifier for the record.", "ZipCode":"This is US 5 digit zipcode."}}
+\n
+### Rule1: Each column name must be double quoted! \n
+### Rule2: Output must be a valid JSON document! \n
 
 {instruction}
 """
@@ -218,19 +222,18 @@ DATA_ANALYSIS_PROMPT = PromptTemplate(
 )
 
 TOOL_SELECTION_PROMPT_TEMPLATE = """
-You are an expert in selecting right tool for the given instruction. Here is 
-a list of candidate tools. 
+You are an expert in selecting right tool for the given instruction. Here is
+a list of candidate tools.
 
-"transform_df": applies a transformation to a provided PySpark DataFrame,
-the specifics of which are determined by the 'desc' parameter. 
+"transform_dataframe": applies a transformation to a provided PySpark DataFrame,
+the specifics of which are determined by the '{{instruction}}' parameter.
 
-"create_geo_bins": performs geospatial binning function to create an aggregated data in geojson document. 
+"create_square_bins": performs geospatial binning function to create an aggregated data in geojson document and
+then render the output results using a smart mapping.
 
-"plot_df_geo_bins": performs geospatial binning function and then plot the data in a live map. 
+"create_dataframe_from_s3": performs preliminary data analysis on a dataset from Amazon S3 data store.
 
-"analyze_s3_dataset": performs preliminary data analysis on a dataset from Amazon S3 data store. 
-
-You must select only one of these tools! 
+You must select only one of these tools!
 
 {instruction}
 """
@@ -238,6 +241,130 @@ You must select only one of these tools!
 TOOL_SELECTION_PROMPT = PromptTemplate(
     input_variables=["instruction"], template=TOOL_SELECTION_PROMPT_TEMPLATE
 )
+
+# TOOL_SELECTION_PROMPT_TEMPLATE = """
+# You are an expert in selecting right tool for the given instruction. \n
+# Here is a list of candidate tools. \n
+# "transform_dataframe" -> applies a SQL query to a provided PySpark DataFrame,\n
+# the specifics of which are determined by the user input parameter. \n
+# You must have a PySpark Dataframe available before performing this function. \n
+# The SQL query does NOT apply to spatial binning. \n
+# "create_square_bins" -> performs geospatial binning function to the dataset and \n
+# then render the output results using a smart mapping method. The parameters \n
+# should be extracted from the user input.\n
+# You must have a PySpark Dataframe available before performing this function. \n
+# "create_dataframe_from_s3" -> create a dataframe from Amazon S3 URL and \n
+# performs preliminary data analysis on a dataset. The S3 URL should be extracted \n
+# from the user input. \n
+# You must select one or more of these tools, and tools must be included in a format of
+# JSON: {{"tools": ["create_square_bins","transform_dataframe","create_dataframe_from_s3"]}}. \n
+# {instruction}
+# """
+#
+
+# MULTI_TOOLS_SELECTION_PROMPT_TEMPLATE = """
+# You are an AI assistant to help users select right tools for the given instruction.
+# Here is a list of candidate tools.
+# \n
+# "transform_dataframe": applies a  SQL query to a provided PySpark DataFrame,
+# the specifics of which are determined by the user input parameter.
+# You must have a PySpark Dataframe available before performing this function.
+# The SQL query does NOT apply to spatial binning.
+# \n
+# "create_square_bins": performs geospatial square binning function to the dataset and
+# then render the output results using a smart mapping method. The parameters
+# should be extracted from the user input.
+# You must have a PySpark Dataframe available before performing this function.
+# \n
+# "create_dataframe_from_s3": create a dataframe from Amazon S3 URL and
+# performs preliminary data analysis on a dataset. The S3 URL should be extracted
+# from the user input.
+# \n
+# "create_hexagon_bins": performs geospatial hexagon binning function to the dataset and
+# then render the output results using a smart mapping method. The parameters
+# should be extracted from the user input. This tool can only be selected
+# if the 'hexagon' keyword must be mentioned in the message!
+# You must have a PySpark Dataframe available before performing this function.
+# \n
+# ### rule1: You must select one or more of these tools, and tools must be included in a format of
+# JSON:
+# ```
+# {{"tools": ["create_square_bins","transform_dataframe","create_dataframe_from_s3"]}}
+# ```
+# and the list of tools must be in an order that can be executed.\n
+# ### rule2: Do not generate any code except JSON! \n
+# ### rule3: "transform_dataframe" tool can be used multiple times but "create_square_bins" and
+# "create_dataframe_from_s3" tools can only be applied once!
+# \n
+# {instruction}
+# """
+
+# MULTI_TOOLS_SELECTION_PROMPT = PromptTemplate(
+#     input_variables=["instruction"], template=MULTI_TOOLS_SELECTION_PROMPT_TEMPLATE
+# )
+
+MULTI_TOOLS_SELECTION_PROMPT = ChatPromptTemplate.from_messages([
+    ("system",
+     """You are an AI assistant that helps users select tools.
+Pay careful attention to what users ask you to do.
+"""
+     ),
+    ("human", """
+    You are an AI assistant to help users select right tools for the given instruction. 
+Here is a list of candidate tools. 
+\n
+"transform_dataframe": applies a SQL query to a provided PySpark DataFrame,
+the specifics of which are determined by the user input parameter. 
+You must have a PySpark Dataframe available before performing this function. 
+The SQL query does NOT apply to spatial binning. 
+\n
+"create_square_bins": performs geospatial square binning function to the dataset and
+then render the output results using a smart mapping method. The parameters 
+should be extracted from the user input.
+You must have a PySpark Dataframe available before performing this function. 
+\n
+"create_dataframe_from_s3": create a PySpark dataframe from Amazon S3 data source (URL) and 
+performs preliminary data analysis on a dataset. The S3 URL should be extracted 
+from the user input. 
+\n
+"create_hexagon_bins": performs geospatial hexagon binning function to the dataset and
+then render the output results using a smart mapping method. The parameters 
+should be extracted from the user input. This tool can only be selected 
+if the 'hexagon' keyword must be mentioned in the message! 
+You must have a PySpark Dataframe available before performing this function. 
+\n
+### rule1: You must select one or more of these tools, and tools must be included in a format of
+JSON: 
+```
+{{"tools": ["create_dataframe_from_s3","create_square_bins",]}} 
+```
+and the list of tools must be in an order that can be executed.\n
+### rule2: Do not generate any code except JSON! \n
+### rule3: "transform_dataframe" tool can be used multiple times but "create_square_bins" and 
+"create_dataframe_from_s3" tools can only be applied once! 
+\n
+ {instruction}"""),
+])
+
+INFO_EXTRACTION_PROMPT_TEMPLATE = """
+You are AI assistant specializing extracting sentences from the given user input 
+based on user's instruction in the beginning of the paragraphs. \n
+{instruction}
+"""
+
+# INFO_EXTRACTION_PROMPT = PromptTemplate(
+#     input_variables=["instruction"], template=INFO_EXTRACTION_PROMPT_TEMPLATE
+# )
+
+INFO_EXTRACTION_PROMPT = ChatPromptTemplate.from_messages([
+    ("system",
+     """You are an AI assistant that helps users find information. 
+Pay careful attention to what users ask you to do.
+"""),
+    ("human", """
+ {instruction}"""),
+])
+
 
 CREATE_GEOBINS_PROMPT_TEMPLATE = """
 You are an Apache Spark SQL expert programmer with knowledge in spatial operations.

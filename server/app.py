@@ -2,22 +2,22 @@
 # pip install python-multipart
 #
 from pydantic import BaseModel
-from fastapi import HTTPException, FastAPI, Response, Depends, Form, Request
+
 from uuid import UUID, uuid4
 
+from fastapi import HTTPException, FastAPI, Response, Depends, Request
 from fastapi_sessions.backends.implementations import InMemoryBackend
 from fastapi_sessions.session_verifier import SessionVerifier
 from fastapi_sessions.frontends.implementations import SessionCookie, CookieParameters
 from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 
-from geollm.geo_agent import GeoAgent
+from geollm.geo_agent import GeoAgent, Message
 from geollm.geo_llm import GeoLLM
 
 import glob
 import os
 import time
-from typing import Annotated
 
 from pyspark.sql import SparkSession
 from langchain.chat_models import AzureChatOpenAI
@@ -84,7 +84,7 @@ verifier = BasicVerifier(
 
 
 def create_geo_llm() -> GeoLLM:
-    spark_jars = glob.glob(os.path.join(".", "lib", "*.jar"))[0]
+    spark_jars = glob.glob(os.path.join("../", "lib", "*.jar"))[0]
 
     aws_access_key = os.environ["AWS_ACCESS_KEY"]
     aws_secret_key = os.environ["AWS_SECRET_KEY"]
@@ -105,10 +105,12 @@ def create_geo_llm() -> GeoLLM:
 
     llm = AzureChatOpenAI(
         openai_api_base="https://esri-openai-dev.openai.azure.com",
-        openai_api_version="2023-05-15",
+        # openai_api_version="2023-05-15",
+        openai_api_version="2023-08-01-preview",
         deployment_name="esri-chatgpt-dev",
         openai_api_key="974995b34b294be196324349ac32e5b2",
         openai_api_type="azure",
+        temperature=0,
     )
 
     geo_llm = GeoLLM(llm, spark_session=spark.getActiveSession(), enable_cache=False, verbose=True)
@@ -135,16 +137,31 @@ TEMP_IMAGE_DIR = './output'
 
 
 @app.post("/chat/", dependencies=[Depends(cookie)])
-async def chat(message: Annotated[str, Form()], response: Response, request: Request,
+async def chat(message: Message, response: Response, request: Request,
                session_id: UUID = Depends(cookie)
                ) -> str:
     agent = await get_geo_agent(session_id, response)
     print(f'{request.url}')
     if agent:
-        print(f'message from user: {message}')
+        print(f'message from user: {message.message}')
         print(f'selected agent: {agent}, # of agents: {len(agent_cache)}')
         server_url = f'{request.url}'
         return agent.chat(message, server_url[0:server_url.index('/chat')])
+    else:
+        return f'{{"success":"False", "agent_message":"No valid GeoAgent is available!"}}'
+
+
+@app.post("/chat2/", dependencies=[Depends(cookie)])
+async def chat2(message: Message, response: Response, request: Request,
+               session_id: UUID = Depends(cookie)
+               ) -> str:
+    agent = await get_geo_agent(session_id, response)
+    print(f'{request.url}')
+    if agent:
+        print(f'message from user: {message.message}')
+        print(f'selected agent: {agent}, # of agents: {len(agent_cache)}')
+        server_url = f'{request.url}'
+        return agent.chat2(message, server_url[0:server_url.index('/chat2')])
     else:
         return f'{{"success":"False", "agent_message":"No valid GeoAgent is available!"}}'
 

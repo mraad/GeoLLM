@@ -1,3 +1,4 @@
+from json import JSONDecodeError
 
 import pandas as pd  # noqa: F401
 
@@ -25,8 +26,8 @@ from .cache import Cache, LLMChainWithCache, SKIP_CACHE_TAGS, SearchToolWithCach
 from .code_logger import CodeLogger
 from .prompts import EXPLAIN_DF_PROMPT, PLOT_PROMPT, SEARCH_PROMPT, SQL_PROMPT
 from .prompts import TRANSFORM_PROMPT, UDF_PROMPT, VERIFY_PROMPT, DATA_ANALYSIS_PROMPT
-from .prompts import TOOL_SELECTION_PROMPT, GEOBINS_PLOT_PROMPT
-from .prompts import CREATE_GEOBINS_PROMPT, CREATE_GEO_BINS_PROMPT
+from .prompts import TOOL_SELECTION_PROMPT, GEOBINS_PLOT_PROMPT, INFO_EXTRACTION_PROMPT
+from .prompts import MULTI_TOOLS_SELECTION_PROMPT, CREATE_GEO_BINS_PROMPT
 from .temp_view_utils import random_view_name, replace_view_name
 
 # AIUtils
@@ -51,7 +52,7 @@ from .temp_view_utils import random_view_name, replace_view_name
 
 
 geo_function_templates = {
-    "create_geo_bins":
+    "create_square_bins":
         """
 import geofunctions as S
 import pyspark.sql.functions as F
@@ -125,7 +126,7 @@ class GeoLLM:
         """
         self._spark = spark_session or SparkSession.builder.getOrCreate()
         if llm is None:
-            llm = ChatOpenAI(model_name="gpt-4", temperature=0.05)
+            llm = ChatOpenAI(model_name="gpt-4", temperature=0.0)
         self._llm = llm
         self._web_search_tool = web_search_tool or self._default_web_search_tool
         if enable_cache:
@@ -149,18 +150,21 @@ class GeoLLM:
         else:
             self._cache = None
             self._enable_cache = False
+
         self._encoding = encoding or tiktoken.get_encoding("cl100k_base")
         self._max_tokens_of_web_content = max_tokens_of_web_content
         self._search_llm_chain = self._create_llm_chain(prompt=SEARCH_PROMPT)
         self._sql_llm_chain = self._create_llm_chain(prompt=SQL_PROMPT)
         self._data_analysis_llm_chain = self._create_llm_chain(prompt=DATA_ANALYSIS_PROMPT)
         self._tool_selection_llm_chain = self._create_llm_chain(prompt=TOOL_SELECTION_PROMPT)
+        self._tools_selection_llm_chain = self._create_llm_chain(prompt=MULTI_TOOLS_SELECTION_PROMPT)
         self._explain_chain = self._create_llm_chain(prompt=EXPLAIN_DF_PROMPT)
         self._transform_chain = self._create_llm_chain(prompt=TRANSFORM_PROMPT)
         self._plot_chain = self._create_llm_chain(prompt=PLOT_PROMPT)
         self._geo_bins_plot_chain = self._create_llm_chain(prompt=GEOBINS_PLOT_PROMPT)
         # self._create_geo_bins_chain = self._create_llm_chain(prompt=CREATE_GEOBINS_PROMPT)
         self._create_geo_bins_chain = self._create_llm_chain(prompt=CREATE_GEO_BINS_PROMPT)
+        self._info_extraction_chain = self._create_llm_chain(prompt=INFO_EXTRACTION_PROMPT)
         self._verify_chain = self._create_llm_chain(prompt=VERIFY_PROMPT)
         self._udf_chain = self._create_llm_chain(prompt=UDF_PROMPT)
         self._verbose = verbose
@@ -168,6 +172,7 @@ class GeoLLM:
             self._logger = CodeLogger("spark_ai")
 
     def _create_llm_chain(self, prompt: BasePromptTemplate):
+        # print(f'_create_llm_chain._cache: {self._cache}')
         if self._cache is None:
             return LLMChain(llm=self._llm, prompt=prompt)
 
@@ -424,7 +429,7 @@ class GeoLLM:
         """
         instruction = f"The purpose of the request: {desc}" if desc is not None else ""
         tags = self._get_tags(cache)
-        tool_list = ["transform_df", "create_geo_bins", "plot_df_geo_bins", "analyze_s3_dataset"]
+        tool_list = ["transform_df", "create_square_bins", "plot_df_geo_bins", "analyze_s3_dataset"]
 
         response = None
         loop_count = 0
@@ -447,6 +452,69 @@ class GeoLLM:
         if response is None:
             raise Exception("Could not find a tool fitting the description", "")
 
+    @staticmethod
+    def _get_tools_from_response(response: str) -> str | None:
+        # look for json within the response
+        pattern = r'\{.*?\}'
+        json_pattern = re.compile(pattern, re.DOTALL)
+        tools_json_array = re.findall(json_pattern, response)
+        if len(tools_json_array) > 0:
+            candidate_tools = tools_json_array[0]
+            try:
+                match_tools = json.loads(candidate_tools)
+                print(f'select_tools-> response: {match_tools}')
+                if match_tools is not None and len(match_tools['tools']) > 0:
+                    return candidate_tools
+                else:
+                    return None  # try again
+            except JSONDecodeError as e:
+                return None
+
+        return None
+
+    def select_tool2(self, desc: str, cache: bool = True) -> str | None:
+        """
+        Select one or more tools from a list of candidates.
+
+        :param cache:
+        :param desc: desc for one or more candidate tools.
+
+        """
+        instruction = f"{desc}" if desc is not None else ""
+        tags = self._get_tags(cache)
+
+        response = None
+        loop_count = 0
+        print(f'select_tools() message: {instruction}')
+
+        # testing single tool call
+        # print("<-----------------")
+        # single_response = self._tool_selection_llm_chain(desc)
+        # print(single_response)
+        # print("------------------>")
+
+        while response is None and loop_count < 3:
+            response = self._tools_selection_llm_chain.run(
+                tags=tags,
+                instruction=instruction,
+            )
+            loop_count += 1
+
+            if response is not None:
+                # look for json within the response
+                pattern = r'\{.*?\}'
+                json_pattern = re.compile(pattern, re.DOTALL)
+                json_matches = re.findall(json_pattern, response)
+                if len(json_matches) > 0:
+                    tools = self._get_tools_from_response(json_matches[0])
+                    if tools is None:
+                        response = None
+                    else:
+                        return tools
+
+        if response is None:
+            raise Exception("Could not find tools fitting the description", "")
+
     def analyze_sample_data(self, data_samples: str, cache: bool = True) -> str | None:
         """
         Analyze the data items based on the given sample dataset.
@@ -455,7 +523,8 @@ class GeoLLM:
         :param cache:
 
         """
-        instruction = f"The purpose of the request: {data_samples}" if data_samples is not None else ""
+        instruction = f'Please analyze the data based on these samples {data_samples}' \
+            if data_samples is not None else ""
         tags = self._get_tags(cache)
         print(f'analyze_sample_data() message: {instruction}')
 
@@ -469,13 +538,21 @@ class GeoLLM:
             )
             loop_count += 1
 
-        if response is not None:
-            return os.linesep.join([s for s in response.splitlines() if s]).replace("\n", "\\\\n")
-        else:
-            return response
+            if response is not None:
+                cleaned_response = (os.linesep.join([s for s in response.splitlines() if s])
+                                    .replace("\n", "")).replace("\t", "")
+                print(f'analyze_sample_data, cleaned_response => {cleaned_response}')
+                try:
+                    json.loads(cleaned_response)
+                    return cleaned_response
+                except JSONDecodeError as e:
+                    # invalid JSON return, re-try
+                    response = None
 
-    def create_s3_df(self, s3_url, header: bool = True, infer_schema: bool = True,
-                     cache: bool = True) -> DataFrame | None:
+        return None
+
+    def create_s3_df(self, s3_url, header: bool = True,
+                     infer_schema: bool = True, cache: bool = True) -> DataFrame | None:
         if s3_url is None or not s3_url.startswith("s3a://"):
             return None
 
@@ -499,7 +576,7 @@ class GeoLLM:
         error_msg = ''
         if response is None:
             success = False
-            response = ''
+            response = '{}'
             error_msg = "Failed to get preliminary analysis results from LLM after 3 tries."
 
         response = response.replace("\\n", "").replace('\\', '')
@@ -507,6 +584,14 @@ class GeoLLM:
         print("================ analyze_s3_dataset above === ")
         return (f'{{"success":"{success}","error_msg":"{error_msg}","col_data_types":{col_info_json},'
                 f'"samples":{samples_json},"col_descriptions":{response}}}')
+
+    def get_sql_code(self, df: DataFrame, desc: str, cache: bool = True) -> str:
+        schema_str = self._get_df_schema(df)
+        tags = self._get_tags(cache)
+        llm_result = self._transform_chain.run(
+            tags=tags, view_name='', columns=schema_str, desc=desc
+        )
+        return self._extract_code_blocks(llm_result)[0]
 
     def transform_df(self, df: DataFrame, desc: str, cache: bool = True) -> DataFrame:
         """
@@ -521,7 +606,7 @@ class GeoLLM:
                  on the input DataFrame.
         """
         # get first record as an example and append to the 'desc'
-        desc = f'{desc}. Sample: {df.take(1)}.'
+        desc = f'{desc}. Sample: {df.take(1)[0]}.'
 
         temp_view_name = random_view_name()
         create_temp_view_code = CodeLogger.colorize_code(
@@ -608,14 +693,14 @@ class GeoLLM:
                 else:
                     raise Exception("Could not evaluate Python code", e)
 
-    def create_geo_bins(
+    def create_square_bins(
             self, df: DataFrame, output_file: str, desc: Optional[str] = None, cache: bool = True
     ) -> None:
         # assert DataFrame is not None
         if df is None:
             raise Exception("Could not perform geo-binning!", "The required PySpark DataFrame is not defined!")
 
-        instruction = f"The purpose of the plot: {desc}" if desc is not None else ""
+        instruction = f"The purpose of the action: {desc}" if desc is not None else ""
         tags = self._get_tags(cache)
 
         response = None
@@ -630,28 +715,113 @@ class GeoLLM:
                 instruction=instruction,
             )
             self.log(response)
-            codeblocks = self._extract_code_blocks(response)
-            code = "\n".join(codeblocks)
-            print(code)
-            import json
-            code_json = json.loads(code)
-            python_code = ''
-            for item in code_json:
-                if type(code_json[item]) is str:
-                    python_code = f'{python_code}\n{item} = "{code_json[item]}"'
-                else:
-                    python_code = f'{python_code}\n{item} = {code_json[item]}'
+            print(f'create_square_bins: {response}')
+            pattern = r'\{.*?\}'
+            json_pattern = re.compile(pattern, re.DOTALL)
+            response_json_array = re.findall(json_pattern, response)
+            print(f'create_square_bins: response_json_array => {response_json_array}')
+            if len(response_json_array) > 0:
+                # codeblocks = self._extract_code_blocks(response)
+                # code = "\n".join(codeblocks)
+                # print(code)
+                # check lon_column and lat_column names against Dataframe
+                parameters_json = self._check_lat_lon_cols(df, response_json_array[0])
+                print(f'parameter json => {parameters_json}')
+                code_json = json.loads(parameters_json)
+                python_code = ''
+                for item in code_json:
+                    if type(code_json[item]) is str:
+                        python_code = f'{python_code}\n{item} = "{code_json[item]}"'
+                    else:
+                        python_code = f'{python_code}\n{item} = {code_json[item]}'
 
-            python_code = f'{python_code}\noutput_file = "{output_file}"\n{geo_function_templates["create_geo_bins"]}'
-            print(python_code)
-            try:
-                exec(compile(python_code, "create_geo_bins-CodeGen", "exec"))
-            except Exception as e:
-                self.log(code)
-                if loop_count < 3:
-                    response = None
-                else:
-                    raise Exception("Could not evaluate Python code in create_geo_bins after 3 tries!", e)
+                python_code = (f'{python_code}\noutput_file = "{output_file}"\n'
+                               f'{geo_function_templates["create_square_bins"]}')
+                print(python_code)
+                try:
+                    exec(compile(python_code, "create_square_bins-CodeGen", "exec"))
+                except Exception as e:
+                    self.log(python_code)
+                    if loop_count < 3:
+                        response = None
+                    else:
+                        raise Exception("Could not evaluate Python code in create_square_bins after 3 tries!", e)
+            else:
+                response = None
+
+    def _check_lat_lon_cols(self, df: DataFrame, col_json_str: str, cache: bool = True) -> str | None:
+        # first check if the lat/lon columns extracted columns from Dataframe
+        column_json = json.loads(col_json_str)
+        lat_col = column_json['lat_column']
+        lon_col = column_json['lon_column']
+        lat_found = False
+        lon_found = False
+        for name, dtype in df.dtypes:
+            if name == lat_col and (dtype == 'double' or dtype == 'float'):
+                lat_found = True
+            if name == lon_col and (dtype == 'double' or dtype == 'float'):
+                lon_found = True
+        if lat_found and lon_found:
+            return col_json_str
+
+        print(f'try to direct extracting x/y columns from column names and types!')
+        # extracted lat/lon columns not found from Dataframe based on column name and type
+        x_col_candidate = None
+        x_col_candidate_priority = 10000000
+        y_col_candidate = None
+        y_col_candidate_priority = 10000000
+
+        for col_name, col_type in df.dtypes:
+            if col_type == 'double' or col_type == 'float':
+                if col_name == 'X' or col_name == 'x':
+                    x_col_candidate = col_name
+                    x_col_candidate_priority = 0
+                elif col_name.startswith("X") or col_name.startswith("x"):
+                    current_priority = len(col_name)
+                    if x_col_candidate is None or current_priority < x_col_candidate_priority:
+                        x_col_candidate = col_name
+                        x_col_candidate_priority = current_priority
+                elif col_name == 'Longitude' or col_name == 'longitude':
+                    current_priority = 1
+                    if x_col_candidate is None or current_priority < x_col_candidate_priority:
+                        x_col_candidate = col_name
+                        x_col_candidate_priority = current_priority
+                elif col_name.startswith("Lon") or col_name.startswith("lon"):
+                    current_priority = len(col_name)
+                    if x_col_candidate is None or current_priority < x_col_candidate_priority:
+                        x_col_candidate = col_name
+                        x_col_candidate_priority = current_priority
+
+                if col_name == 'Y' or col_name == 'y':
+                    y_col_candidate = col_name
+                    y_col_candidate_priority = 0
+                elif col_name.startswith("Y") or col_name.startswith("y"):
+                    current_priority = len(col_name)
+                    if y_col_candidate is None or current_priority < y_col_candidate_priority:
+                        y_col_candidate = col_name
+                        y_col_candidate_priority = current_priority
+                elif col_name == 'Latitude' or col_name == 'latitude':
+                    current_priority = 1
+                    if y_col_candidate is None or current_priority < y_col_candidate_priority:
+                        y_col_candidate = col_name
+                        y_col_candidate_priority = current_priority
+                elif col_name.startswith("Lat") or col_name.startswith("lat"):
+                    current_priority = len(col_name)
+                    if y_col_candidate is None or current_priority < y_col_candidate_priority:
+                        y_col_candidate = col_name
+                        y_col_candidate_priority = current_priority
+
+        if x_col_candidate is not None and y_col_candidate is not None:
+            column_json['lon_column'] = x_col_candidate
+            column_json['lat_column'] = y_col_candidate
+            return json.dumps(column_json)
+
+        return None
+
+    def extract_info(self, desc: str) -> str:
+        return self._info_extraction_chain.run(
+            instruction=desc
+        )
 
     def verify_df(self, df: DataFrame, desc: str, cache: bool = True) -> None:
         """
