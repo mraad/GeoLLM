@@ -8,6 +8,22 @@ import urllib.parse
 from pyspark.sql import DataFrame
 from pydantic import BaseModel
 from .geo_llm import GeoLLM
+from .code_logger import CodeLogger
+
+data_sources = [
+    {
+        "data_source_city": "Chicago",
+        "data_source_s3_urls": [
+            {"2019": "s3a://frankxia-s3/chicago_crime_data/Crimes_-_2019.csv"},
+            {"2020": "s3a://frankxia-s3/chicago_crime_data/Crimes_-_2020.csv"},
+            {"2021": "s3a://frankxia-s3/chicago_crime_data/Crimes_-_2021.csv"},
+            {"2022": "s3a://frankxia-s3/chicago_crime_data/Crimes_-_2022.csv"},
+            {"2023": "s3a://frankxia-s3/chicago_crime_data/Crimes_-_2023.csv"}
+        ],
+        "data_source_description":
+            "This data source contains five years (from 2019 to 2023) crime data in CSV format from city of Chicago",
+    }
+]
 
 
 class Message(BaseModel):
@@ -17,11 +33,18 @@ class Message(BaseModel):
 
 class GeoAgent:
 
-    def __init__(self, geo_llm: GeoLLM, output_dir: str = "./"):
+    def __init__(self, geo_llm: GeoLLM, output_dir: str = "./", verbose: bool = True):
         self._df = None
         self._geo_llm = geo_llm
         self._output_dir = output_dir
+        self._verbose = verbose
         self._tools = ["transform_dataframe", "create_square_bins", "create_dataframe_from_s3"]
+        if verbose:
+            self._logger = CodeLogger("spark_ai")
+
+    def log(self, message: str) -> None:
+        if self._verbose:
+            self._logger.log(message)
 
     @staticmethod
     def _extract_s3_url(desc: str) -> str | None:
@@ -171,16 +194,75 @@ class GeoAgent:
         return (f'{{"success": "True", "agent_message":"{sql_query_str} '
                 f'does not contain any possible date/time column."}}')
 
+    def _get_data_source_url(self, desc: str) -> str | None:
+        if desc is not None:
+            try:
+                contain_key_chicago = 'Chicago' in desc or 'chicago' in desc
+                contain_key_crime = 'Crime' in desc or 'crime' in desc
+                message = (f'you are date extraction agent. Please extract year data from the given message '
+                           f'and output it as JSON such as '
+                           f'```json'
+                           f'{{"year": 2001}}'
+                           f'```'
+                           f'if there is no year found in the message, output the JSON in the following format:'
+                           f'```json'
+                           f'{{"year":  -1"}}'
+                           f'```'
+                           f'The response in the JSON code block should match the type defined as follows:'
+                           f'```ts'
+                           f'{{"year": number}}'
+                           f'```'
+                           f'{desc}')
+                response = self._geo_llm.extract_info(message)
+                print(f'contain_key_chicago: {contain_key_chicago}, contain_key_crime: {contain_key_crime}, {response}')
+                if response is not None and contain_key_crime and contain_key_chicago:
+                    json_match = re.search(r'```json\n(.*?)\n```', response, re.DOTALL)
+                    if json_match:
+                        year_json = json.loads(json_match.group(1))
+                        # we have some hardcoded Chicago Crime data from 2019 to 2023
+                        # In a more realistic application, the data may need to be downloaded on the fly
+                        # or there are many crime datasets in different cities, we then would use LLM
+                        # to find out which city the user is interested in.
+                        year = str(year_json["year"])
+                        s3_url = None
+                        for key_value in data_sources[0]['data_source_s3_urls']:
+                            for key in key_value.keys():
+                                if key == year:
+                                    s3_url = key_value[year]
+                        print(f'_get_data_source_url: {s3_url}')
+                        return s3_url
+            except ValueError as e:
+                print(e)
+
+        return None
+
     def chat2(self, message: Message, server_url: str) -> str:
         decoded_message = urllib.parse.unquote(message.message)
         print(decoded_message)
+
+        # if there is an existing DataFrame, prefix the user input with
+        if self._df is not None:
+            prefix = "message=Given we have an existing DataFrame, "
+            decoded_message = f'{prefix}{decoded_message[8:]}'
+        else:
+            # check if the message contains enough info to do the analysis it asks for.
+            s3_url = self._get_data_source_url(decoded_message)
+            decoded_message = f'data source: "{s3_url}". {decoded_message}'
+            if s3_url is None:
+                err_msg = (f'{{"success": "False", "agent_message":"User message does not contain information that '
+                           f'matches any existing data source. Please refine your message and try again!"}}')
+                return err_msg
+
         tools_str = self._geo_llm.select_tool2(decoded_message)
         print(f'chat2 tools: {tools_str}')
-        tools = json.loads(tools_str)
-
-        if tools is None or len(tools['tools']) == 0:
-            return (f'{{"success": "False", "agent_message":"Could not find a tool matching your description. '
-                    f'Please refine your message and try again!"}}')
+        err_msg = (f'{{"success": "False", "agent_message":"Could not find a tool matching your description.'
+                   f' Please refine your message and try again!"}}')
+        if tools_str is not None:
+            tools = self._geo_llm.extract_tools_from_candidates(tools_str)
+            if tools is None or len(tools['tools']) == 0:
+                return err_msg
+        else:
+            return err_msg
 
         pattern = r'"(.*?)"'
         final_response = ''
@@ -196,28 +278,39 @@ class GeoAgent:
                         final_response = response
 
                 case 'transform_dataframe':
-                    message = (f'please extract sentences that may require SQL query from the following input:\n'
+                    # this part of prompt could be moved to the Prompts.py as a Template!
+                    message = (f'please extract sentences that may require SQL query from the following input. '
+                               f'Any wording that will limit to use a subset of the data should qualify '
+                               f'the sentence to be an candidate. \n'
+                               f'### Rule 1: If you find nothing related to SQL query, just return empty string.\n'
+                               f'### Rule 2: You should NOT generate any SQL query related to '
+                               f'spatial and geo binning requirements.  \n'
                                f'{decoded_message}')
-                    extract_message = self._geo_llm.extract_info(message)
-                    extract_message = re.findall(pattern, extract_message)
+                    response = self._geo_llm.extract_info(message)
+                    print(f'extracted SQL query message: {response}')
+
+                    extract_message = re.findall(pattern, response)
                     if len(extract_message) > 0:
                         extract_message = extract_message[0]
-                    print(f'extracted SQL query message: {extract_message}')
+                        # in case the transformation is on a possible date column but
+                        # the column type is a 'str' or 'int'
+                        auto_date_transform_response = self._auto_transform_date_columns(extract_message)
+                        print(auto_date_transform_response)
+                        auto_date_transform_response_json = json.loads(auto_date_transform_response)
+                        if auto_date_transform_response_json['success'] == 'False':
+                            return auto_date_transform_response
 
-                    # in case the transformation is on a possible date column but
-                    # the column type is a 'str' or 'int'
-                    auto_date_transform_response = self._auto_transform_date_columns(extract_message)
-                    print(auto_date_transform_response)
-                    auto_date_transform_response_json = json.loads(auto_date_transform_response)
-                    if auto_date_transform_response_json['success'] == 'False':
-                        return auto_date_transform_response
-
-                    response = self._execute_transform_df(extract_message)
-                    response_json = json.loads(response)
-                    if response_json['success'] == 'False':
-                        return response
+                        response = self._execute_transform_df(extract_message)
+                        response_json = json.loads(response)
+                        if response_json['success'] == 'False':
+                            return response
+                        else:
+                            final_response = response
                     else:
-                        final_response = response
+                        self.log(f'Could not extract information from the given message '
+                                 f'that requires SQL transformation. {response}')
+                        final_response = (f'{{"success":"Could not extract information '
+                                          f'from the given message that requires SQL transformation."}}')
 
                 case 'create_square_bins':
                     final_response = self._execute_create_geo_bins(decoded_message, server_url)

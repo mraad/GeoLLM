@@ -93,6 +93,76 @@ with open(output_file, 'w') as f:
 }
 
 
+def _check_lat_lon_cols(df: DataFrame, col_json_str: str, cache: bool = True) -> str | None:
+    # first check if the lat/lon columns extracted columns from Dataframe
+    column_json = json.loads(col_json_str)
+    lat_col = column_json['lat_column']
+    lon_col = column_json['lon_column']
+    lat_found = False
+    lon_found = False
+    for name, dtype in df.dtypes:
+        if name == lat_col and (dtype == 'double' or dtype == 'float'):
+            lat_found = True
+        if name == lon_col and (dtype == 'double' or dtype == 'float'):
+            lon_found = True
+    if lat_found and lon_found:
+        return col_json_str
+
+    print(f'try to direct extracting x/y columns from column names and types!')
+    # extracted lat/lon columns not found from Dataframe based on column name and type
+    x_col_candidate = None
+    x_col_candidate_priority = 10000000
+    y_col_candidate = None
+    y_col_candidate_priority = 10000000
+
+    for col_name, col_type in df.dtypes:
+        if col_type == 'double' or col_type == 'float':
+            if col_name == 'X' or col_name == 'x':
+                x_col_candidate = col_name
+                x_col_candidate_priority = 0
+            elif col_name.startswith("X") or col_name.startswith("x"):
+                current_priority = len(col_name)
+                if x_col_candidate is None or current_priority < x_col_candidate_priority:
+                    x_col_candidate = col_name
+                    x_col_candidate_priority = current_priority
+            elif col_name == 'Longitude' or col_name == 'longitude':
+                current_priority = 1
+                if x_col_candidate is None or current_priority < x_col_candidate_priority:
+                    x_col_candidate = col_name
+                    x_col_candidate_priority = current_priority
+            elif col_name.startswith("Lon") or col_name.startswith("lon"):
+                current_priority = len(col_name)
+                if x_col_candidate is None or current_priority < x_col_candidate_priority:
+                    x_col_candidate = col_name
+                    x_col_candidate_priority = current_priority
+
+            if col_name == 'Y' or col_name == 'y':
+                y_col_candidate = col_name
+                y_col_candidate_priority = 0
+            elif col_name.startswith("Y") or col_name.startswith("y"):
+                current_priority = len(col_name)
+                if y_col_candidate is None or current_priority < y_col_candidate_priority:
+                    y_col_candidate = col_name
+                    y_col_candidate_priority = current_priority
+            elif col_name == 'Latitude' or col_name == 'latitude':
+                current_priority = 1
+                if y_col_candidate is None or current_priority < y_col_candidate_priority:
+                    y_col_candidate = col_name
+                    y_col_candidate_priority = current_priority
+            elif col_name.startswith("Lat") or col_name.startswith("lat"):
+                current_priority = len(col_name)
+                if y_col_candidate is None or current_priority < y_col_candidate_priority:
+                    y_col_candidate = col_name
+                    y_col_candidate_priority = current_priority
+
+    if x_col_candidate is not None and y_col_candidate is not None:
+        column_json['lon_column'] = x_col_candidate
+        column_json['lat_column'] = y_col_candidate
+        return json.dumps(column_json)
+
+    return None
+
+
 class GeoLLM:
     _HTTP_HEADER = {
         "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
@@ -452,25 +522,39 @@ class GeoLLM:
         if response is None:
             raise Exception("Could not find a tool fitting the description", "")
 
-    @staticmethod
-    def _get_tools_from_response(response: str) -> str | None:
+    def _get_tools_from_response(self, response: str) -> dict | None:
         # look for json within the response
         pattern = r'\{.*?\}'
         json_pattern = re.compile(pattern, re.DOTALL)
-        tools_json_array = re.findall(json_pattern, response)
-        if len(tools_json_array) > 0:
-            candidate_tools = tools_json_array[0]
-            try:
-                match_tools = json.loads(candidate_tools)
-                print(f'select_tools-> response: {match_tools}')
-                if match_tools is not None and len(match_tools['tools']) > 0:
-                    return candidate_tools
-                else:
-                    return None  # try again
-            except JSONDecodeError as e:
-                return None
+        json_matches = re.findall(json_pattern, response)
+        print(f'{len(json_matches)} => {json_matches}')
+        tools = None
+        if len(json_matches) > 0:
+            candidate_tools = json_matches[0]
+            tools = self.extract_tools_from_candidates(candidate_tools)
+            if tools is None:
+                if 'tools' in candidate_tools:
+                    tools_index = candidate_tools.index('tools')
+                    tools_array_start = candidate_tools.index('[', tools_index)
+                    tools_array_end = candidate_tools.index(']', tools_index)
+                    if tools_index < tools_array_start < tools_array_end:
+                        tools_json_str = \
+                            f'{{"tools":[{candidate_tools[tools_array_start + 1:tools_array_end]}]}}'
+                        print(f'new tools-json-string: {tools_json_str}')
+                        tools = self.extract_tools_from_candidates(tools_json_str)
+        return tools
 
-        return None
+    @staticmethod
+    def extract_tools_from_candidates(tools_json_str: str) -> dict | None:
+        try:
+            match_tools = json.loads(tools_json_str)
+            print(f'select_tools-> response: {match_tools}')
+            if match_tools is not None and len(match_tools['tools']) > 0:
+                return match_tools
+            else:
+                return None
+        except JSONDecodeError as e:
+            return None
 
     def select_tool2(self, desc: str, cache: bool = True) -> str | None:
         """
@@ -482,9 +566,6 @@ class GeoLLM:
         """
         instruction = f"{desc}" if desc is not None else ""
         tags = self._get_tags(cache)
-
-        response = None
-        loop_count = 0
         print(f'select_tools() message: {instruction}')
 
         # testing single tool call
@@ -493,27 +574,25 @@ class GeoLLM:
         # print(single_response)
         # print("------------------>")
 
+        response = None
+        loop_count = 0
         while response is None and loop_count < 3:
             response = self._tools_selection_llm_chain.run(
                 tags=tags,
                 instruction=instruction,
             )
             loop_count += 1
-
             if response is not None:
-                # look for json within the response
-                pattern = r'\{.*?\}'
-                json_pattern = re.compile(pattern, re.DOTALL)
-                json_matches = re.findall(json_pattern, response)
-                if len(json_matches) > 0:
-                    tools = self._get_tools_from_response(json_matches[0])
-                    if tools is None:
-                        response = None
-                    else:
-                        return tools
+                tools = self._get_tools_from_response(response)
+                if tools is None:
+                    response = None
+                else:
+                    response = json.dumps(tools)
 
         if response is None:
-            raise Exception("Could not find tools fitting the description", "")
+            self.log("Could not find tools fitting the description")
+
+        return response
 
     def analyze_sample_data(self, data_samples: str, cache: bool = True) -> str | None:
         """
@@ -725,7 +804,7 @@ class GeoLLM:
                 # code = "\n".join(codeblocks)
                 # print(code)
                 # check lon_column and lat_column names against Dataframe
-                parameters_json = self._check_lat_lon_cols(df, response_json_array[0])
+                parameters_json = _check_lat_lon_cols(df, response_json_array[0])
                 print(f'parameter json => {parameters_json}')
                 code_json = json.loads(parameters_json)
                 python_code = ''
@@ -748,75 +827,6 @@ class GeoLLM:
                         raise Exception("Could not evaluate Python code in create_square_bins after 3 tries!", e)
             else:
                 response = None
-
-    def _check_lat_lon_cols(self, df: DataFrame, col_json_str: str, cache: bool = True) -> str | None:
-        # first check if the lat/lon columns extracted columns from Dataframe
-        column_json = json.loads(col_json_str)
-        lat_col = column_json['lat_column']
-        lon_col = column_json['lon_column']
-        lat_found = False
-        lon_found = False
-        for name, dtype in df.dtypes:
-            if name == lat_col and (dtype == 'double' or dtype == 'float'):
-                lat_found = True
-            if name == lon_col and (dtype == 'double' or dtype == 'float'):
-                lon_found = True
-        if lat_found and lon_found:
-            return col_json_str
-
-        print(f'try to direct extracting x/y columns from column names and types!')
-        # extracted lat/lon columns not found from Dataframe based on column name and type
-        x_col_candidate = None
-        x_col_candidate_priority = 10000000
-        y_col_candidate = None
-        y_col_candidate_priority = 10000000
-
-        for col_name, col_type in df.dtypes:
-            if col_type == 'double' or col_type == 'float':
-                if col_name == 'X' or col_name == 'x':
-                    x_col_candidate = col_name
-                    x_col_candidate_priority = 0
-                elif col_name.startswith("X") or col_name.startswith("x"):
-                    current_priority = len(col_name)
-                    if x_col_candidate is None or current_priority < x_col_candidate_priority:
-                        x_col_candidate = col_name
-                        x_col_candidate_priority = current_priority
-                elif col_name == 'Longitude' or col_name == 'longitude':
-                    current_priority = 1
-                    if x_col_candidate is None or current_priority < x_col_candidate_priority:
-                        x_col_candidate = col_name
-                        x_col_candidate_priority = current_priority
-                elif col_name.startswith("Lon") or col_name.startswith("lon"):
-                    current_priority = len(col_name)
-                    if x_col_candidate is None or current_priority < x_col_candidate_priority:
-                        x_col_candidate = col_name
-                        x_col_candidate_priority = current_priority
-
-                if col_name == 'Y' or col_name == 'y':
-                    y_col_candidate = col_name
-                    y_col_candidate_priority = 0
-                elif col_name.startswith("Y") or col_name.startswith("y"):
-                    current_priority = len(col_name)
-                    if y_col_candidate is None or current_priority < y_col_candidate_priority:
-                        y_col_candidate = col_name
-                        y_col_candidate_priority = current_priority
-                elif col_name == 'Latitude' or col_name == 'latitude':
-                    current_priority = 1
-                    if y_col_candidate is None or current_priority < y_col_candidate_priority:
-                        y_col_candidate = col_name
-                        y_col_candidate_priority = current_priority
-                elif col_name.startswith("Lat") or col_name.startswith("lat"):
-                    current_priority = len(col_name)
-                    if y_col_candidate is None or current_priority < y_col_candidate_priority:
-                        y_col_candidate = col_name
-                        y_col_candidate_priority = current_priority
-
-        if x_col_candidate is not None and y_col_candidate is not None:
-            column_json['lon_column'] = x_col_candidate
-            column_json['lat_column'] = y_col_candidate
-            return json.dumps(column_json)
-
-        return None
 
     def extract_info(self, desc: str) -> str:
         return self._info_extraction_chain.run(

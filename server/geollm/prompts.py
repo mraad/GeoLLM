@@ -314,34 +314,48 @@ Pay careful attention to what users ask you to do.
 Here is a list of candidate tools. 
 \n
 "transform_dataframe": applies a SQL query to a provided PySpark DataFrame,
-the specifics of which are determined by the user input parameter. 
-You must have a PySpark Dataframe available before performing this function. 
-The SQL query does NOT apply to spatial binning. 
+the specifics of which are determined by the user input message. 
 \n
-"create_square_bins": performs geospatial square binning function to the dataset and
+"create_square_bins": performs spatial or geo spatial (square) binning function to the dataset and
 then render the output results using a smart mapping method. The parameters 
 should be extracted from the user input.
-You must have a PySpark Dataframe available before performing this function. 
 \n
 "create_dataframe_from_s3": create a PySpark dataframe from Amazon S3 data source (URL) and 
 performs preliminary data analysis on a dataset. The S3 URL should be extracted 
 from the user input. 
 \n
-"create_hexagon_bins": performs geospatial hexagon binning function to the dataset and
+"create_hexagon_bins": performs spatial or geo hexagon binning function to the dataset and
 then render the output results using a smart mapping method. The parameters 
 should be extracted from the user input. This tool can only be selected 
 if the 'hexagon' keyword must be mentioned in the message! 
-You must have a PySpark Dataframe available before performing this function. 
 \n
 ### rule1: You must select one or more of these tools, and tools must be included in a format of
-JSON: 
+``` json 
+{{"tools": ["create_dataframe_from_s3","create_square_bins"], "reason":"User message contains a valid S3 URL 
+and key words such as spatial binning or geo-binning."}} 
 ```
-{{"tools": ["create_dataframe_from_s3","create_square_bins",]}} 
+The response in the JSON code block should match the type defined as follows: 
+```ts
+{{"tools": [string,string,string], "reason": string}} 
 ```
-and the list of tools must be in an order that can be executed.\n
-### rule2: Do not generate any code except JSON! \n
-### rule3: "transform_dataframe" tool can be used multiple times but "create_square_bins" and 
-"create_dataframe_from_s3" tools can only be applied once! 
+and the list of tools must be in an order that can be executed.
+\n
+### rule2: Do not generate any Python code except JSON! 
+\n
+### rule3: "transform_dataframe" tool can only be used when there is a DataFrame available! 
+\n
+### rule4: "transform_dataframe"  tool must NOT be applied to any spatial or geo-binning requirements! 
+\n
+### rule5: ""create_square_bins" tool can only be used when there is a DataFrame available! 
+\n
+### rule6: "create_hexagon_bins" tool can only be used when there is a DataFrame available and 
+Hexagon keyword must be part of message! 
+\n
+### rule7: "transform_dataframe", "create_square_bins" and "create_hexagon_bins" tools can be \n
+used multiple times in single session but "create_dataframe_from_s3" tools can only be applied once! 
+\n
+### rule8: "create_dataframe_from_s3" tool must be the first tool to be used and this tool must be used only when \n
+there is a S3 data source url available in the message. \n  
 \n
  {instruction}"""),
 ])
@@ -428,8 +442,13 @@ CREATE_GEOBINS_PROMPT = PromptTemplate(
 CREATE_GEO_BINS_PROMPT_TEMPLATE = """
 You are a specialist who are great at extract variables from a given message. 
 Extract the following variables from the instructions and make the output as a JSON such as,
+```json
 {{"lon_column": "col_lon", "lat_column":"col_lat", "cell_size":10, "max_count":10}}
-
+```
+The response in the JSON code block should match the type defined as follows: 
+```ts
+{{"lon_column": string, "lat_column":string, "cell_size":number, "max_count":number}}
+```
 1. <lon_column> (the name of the longitude or X column)
 2. <lat_column> (the name of the latitude or Y column)
 3. <cell_size> (the size of the spatial bin cell)

@@ -153,8 +153,8 @@ async def chat(message: Message, response: Response, request: Request,
 
 @app.post("/chat2/", dependencies=[Depends(cookie)])
 async def chat2(message: Message, response: Response, request: Request,
-               session_id: UUID = Depends(cookie)
-               ) -> str:
+                session_id: UUID = Depends(cookie)
+                ) -> str:
     agent = await get_geo_agent(session_id, response)
     print(f'{request.url}')
     if agent:
@@ -203,6 +203,7 @@ async def create_session(name: str, response: Response):
     await create_agent_and_session(session_id, response)
     return f"created session for {name}"
 
+
 #
 # @app.get("/whoami", dependencies=[Depends(cookie)])
 # async def whoami(session_data: SessionData = Depends(verifier)):
@@ -240,4 +241,3 @@ async def read_output_data(name: str):
     print(file_path)
     response = FileResponse(file_path, media_type="application/json")
     return response
-
