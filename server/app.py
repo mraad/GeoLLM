@@ -103,12 +103,23 @@ def create_geo_llm() -> GeoLLM:
         .getOrCreate()
     )
 
+    # GPT-3.5
+    # llm = AzureChatOpenAI(
+    #     openai_api_base="https://esri-openai-dev.openai.azure.com",
+    #     # openai_api_version="2023-05-15",
+    #     openai_api_version="2023-08-01-preview",
+    #     deployment_name="esri-chatgpt-dev",
+    #     openai_api_key="974995b34b294be196324349ac32e5b2",
+    #     openai_api_type="azure",
+    #     temperature=0,
+    # )
+
+    # GPT-4
     llm = AzureChatOpenAI(
-        openai_api_base="https://esri-openai-dev.openai.azure.com",
-        # openai_api_version="2023-05-15",
-        openai_api_version="2023-08-01-preview",
-        deployment_name="esri-chatgpt-dev",
-        openai_api_key="974995b34b294be196324349ac32e5b2",
+        openai_api_base="https://esri-openai-ist-dev02.openai.azure.com/",
+        openai_api_version="2023-07-01-preview",
+        deployment_name="esri-gpt4-dev",
+        openai_api_key="d680641de0ac4885b3e7ed8b9066bce8",
         openai_api_type="azure",
         temperature=0,
     )
