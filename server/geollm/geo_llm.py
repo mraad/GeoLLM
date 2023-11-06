@@ -20,6 +20,7 @@ from langchain.chat_models import ChatOpenAI
 
 from pyspark.sql import DataFrame, SparkSession
 from pyspark.sql.functions import *
+import openai
 
 from .ai_utils import AIUtils
 from .cache import Cache, LLMChainWithCache, SKIP_CACHE_TAGS, SearchToolWithCache
@@ -29,6 +30,8 @@ from .prompts import TRANSFORM_PROMPT, UDF_PROMPT, VERIFY_PROMPT, DATA_ANALYSIS_
 from .prompts import TOOL_SELECTION_PROMPT, GEOBINS_PLOT_PROMPT, INFO_EXTRACTION_PROMPT
 from .prompts import MULTI_TOOLS_SELECTION_PROMPT, CREATE_GEO_BINS_PROMPT
 from .temp_view_utils import random_view_name, replace_view_name
+from .geo_functions import GeoFunctions
+from .geo_functions import geo_function_definitions
 
 # AIUtils
 # Cache
@@ -50,6 +53,11 @@ from .temp_view_utils import random_view_name, replace_view_name
 # SearchToolWithCache
 # random_view_name, replace_view_name
 
+# openai for function calls
+openai.api_key = os.getenv('openai_api_key')
+openai.api_version = os.getenv('openai_api_version')
+openai.api_type = os.getenv('openai_api_type')
+openai.api_base = os.getenv('openai_api_base')
 
 geo_function_templates = {
     "create_square_bins":
@@ -93,76 +101,6 @@ with open(output_file, 'w') as f:
 }
 
 
-def _check_lat_lon_cols(df: DataFrame, col_json_str: str, cache: bool = True) -> str | None:
-    # first check if the lat/lon columns extracted columns from Dataframe
-    column_json = json.loads(col_json_str)
-    lat_col = column_json['lat_column']
-    lon_col = column_json['lon_column']
-    lat_found = False
-    lon_found = False
-    for name, dtype in df.dtypes:
-        if name == lat_col and (dtype == 'double' or dtype == 'float'):
-            lat_found = True
-        if name == lon_col and (dtype == 'double' or dtype == 'float'):
-            lon_found = True
-    if lat_found and lon_found:
-        return col_json_str
-
-    print(f'try to direct extracting x/y columns from column names and types!')
-    # extracted lat/lon columns not found from Dataframe based on column name and type
-    x_col_candidate = None
-    x_col_candidate_priority = 10000000
-    y_col_candidate = None
-    y_col_candidate_priority = 10000000
-
-    for col_name, col_type in df.dtypes:
-        if col_type == 'double' or col_type == 'float':
-            if col_name == 'X' or col_name == 'x':
-                x_col_candidate = col_name
-                x_col_candidate_priority = 0
-            elif col_name.startswith("X") or col_name.startswith("x"):
-                current_priority = len(col_name)
-                if x_col_candidate is None or current_priority < x_col_candidate_priority:
-                    x_col_candidate = col_name
-                    x_col_candidate_priority = current_priority
-            elif col_name == 'Longitude' or col_name == 'longitude':
-                current_priority = 1
-                if x_col_candidate is None or current_priority < x_col_candidate_priority:
-                    x_col_candidate = col_name
-                    x_col_candidate_priority = current_priority
-            elif col_name.startswith("Lon") or col_name.startswith("lon"):
-                current_priority = len(col_name)
-                if x_col_candidate is None or current_priority < x_col_candidate_priority:
-                    x_col_candidate = col_name
-                    x_col_candidate_priority = current_priority
-
-            if col_name == 'Y' or col_name == 'y':
-                y_col_candidate = col_name
-                y_col_candidate_priority = 0
-            elif col_name.startswith("Y") or col_name.startswith("y"):
-                current_priority = len(col_name)
-                if y_col_candidate is None or current_priority < y_col_candidate_priority:
-                    y_col_candidate = col_name
-                    y_col_candidate_priority = current_priority
-            elif col_name == 'Latitude' or col_name == 'latitude':
-                current_priority = 1
-                if y_col_candidate is None or current_priority < y_col_candidate_priority:
-                    y_col_candidate = col_name
-                    y_col_candidate_priority = current_priority
-            elif col_name.startswith("Lat") or col_name.startswith("lat"):
-                current_priority = len(col_name)
-                if y_col_candidate is None or current_priority < y_col_candidate_priority:
-                    y_col_candidate = col_name
-                    y_col_candidate_priority = current_priority
-
-    if x_col_candidate is not None and y_col_candidate is not None:
-        column_json['lon_column'] = x_col_candidate
-        column_json['lat_column'] = y_col_candidate
-        return json.dumps(column_json)
-
-    return None
-
-
 class GeoLLM:
     _HTTP_HEADER = {
         "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
@@ -174,6 +112,7 @@ class GeoLLM:
     def __init__(
             self,
             llm: Optional[BaseLanguageModel] = None,
+            openai_function_calls: bool = True,
             web_search_tool: Optional[Callable[[str], str]] = None,
             spark_session: Optional[SparkSession] = None,
             enable_cache: bool = True,
@@ -198,6 +137,7 @@ class GeoLLM:
         if llm is None:
             llm = ChatOpenAI(model_name="gpt-4", temperature=0.0)
         self._llm = llm
+        self._openai_function_calls = openai_function_calls
         self._web_search_tool = web_search_tool or self._default_web_search_tool
         if enable_cache:
             self._enable_cache = enable_cache
@@ -240,6 +180,9 @@ class GeoLLM:
         self._verbose = verbose
         if verbose:
             self._logger = CodeLogger("spark_ai")
+
+    def is_openai_function_call_defined(self) -> bool:
+        return self._openai_function_calls
 
     def _create_llm_chain(self, prompt: BasePromptTemplate):
         # print(f'_create_llm_chain._cache: {self._cache}')
@@ -804,7 +747,7 @@ class GeoLLM:
                 # code = "\n".join(codeblocks)
                 # print(code)
                 # check lon_column and lat_column names against Dataframe
-                parameters_json = _check_lat_lon_cols(df, response_json_array[0])
+                parameters_json = self._check_lat_lon_cols(df, response_json_array[0])
                 print(f'parameter json => {parameters_json}')
                 code_json = json.loads(parameters_json)
                 python_code = ''
@@ -827,6 +770,131 @@ class GeoLLM:
                         raise Exception("Could not evaluate Python code in create_square_bins after 3 tries!", e)
             else:
                 response = None
+
+    @staticmethod
+    def create_square_bins_with_function_call(
+            df: DataFrame, output_file: str, desc: Optional[str] = None, cache: bool = True
+    ) -> None:
+        # assert DataFrame is not None
+        if df is None:
+            raise Exception("Could not perform geo-binning!", "The required PySpark DataFrame is not defined!")
+
+        instruction = f"{desc} with geojson output file at {output_file}" if desc is not None else ""
+        # tags = self._get_tags(cache)
+
+        response = None
+        loop_count = 0
+
+        callable_geo_functions = GeoFunctions(df)
+        available_geo_functions = callable_geo_functions.available_functions()
+        # print(geo_function_definitions)
+
+        while response is None and loop_count < 3:
+            user_messages = [
+                {
+                    "role": "user",
+                    "content": instruction,
+                }
+            ]
+
+            # print("creating square bins with function calls, user_message: ")
+            # print(user_messages)
+
+            call_response = openai.ChatCompletion.create(
+                engine="esri-gpt4-dev",
+                messages=user_messages,
+                functions=geo_function_definitions,
+                function_call="auto",
+            )
+            response_message = call_response["choices"][0]["message"]
+            # print(response_message)
+            # print(response_message.get("function_call"))
+            if response_message.get("function_call"):
+                # Call the function. The JSON response may not always be valid so make sure to handle errors
+                function_name = response_message["function_call"]["name"]
+                try:
+                    function_to_call = available_geo_functions[function_name]
+                    function_args = json.loads(response_message["function_call"]["arguments"])
+                    function_response = function_to_call(**function_args)
+                    # print(function_response)
+                    if os.path.isfile(output_file):
+                        response = function_response
+                except KeyError:
+                    if loop_count < 3:
+                        loop_count = loop_count + 1
+                        response = None
+                    else:
+                        raise Exception("Could not execute function calls in create_square_bins after 3 tries!")
+
+    @staticmethod
+    def _check_lat_lon_cols(df: DataFrame, col_json_str: str, cache: bool = True) -> str | None:
+        # first check if the lat/lon columns extracted columns from Dataframe
+        column_json = json.loads(col_json_str)
+        lat_col = column_json['lat_column']
+        lon_col = column_json['lon_column']
+        lat_found = False
+        lon_found = False
+        for name, dtype in df.dtypes:
+            if name == lat_col and (dtype == 'double' or dtype == 'float'):
+                lat_found = True
+            if name == lon_col and (dtype == 'double' or dtype == 'float'):
+                lon_found = True
+        if lat_found and lon_found:
+            return col_json_str
+
+        print(f'try to direct extracting x/y columns from column names and types!')
+        # extracted lat/lon columns not found from Dataframe based on column name and type
+        x_col_candidate = None
+        x_col_candidate_priority = 10000000
+        y_col_candidate = None
+        y_col_candidate_priority = 10000000
+
+        for col_name, col_type in df.dtypes:
+            if col_type == 'double' or col_type == 'float':
+                if col_name == 'X' or col_name == 'x':
+                    x_col_candidate = col_name
+                    x_col_candidate_priority = 0
+                elif col_name.startswith("X") or col_name.startswith("x"):
+                    current_priority = len(col_name)
+                    if x_col_candidate is None or current_priority < x_col_candidate_priority:
+                        x_col_candidate = col_name
+                        x_col_candidate_priority = current_priority
+                elif col_name == 'Longitude' or col_name == 'longitude':
+                    current_priority = 1
+                    if x_col_candidate is None or current_priority < x_col_candidate_priority:
+                        x_col_candidate = col_name
+                        x_col_candidate_priority = current_priority
+                elif col_name.startswith("Lon") or col_name.startswith("lon"):
+                    current_priority = len(col_name)
+                    if x_col_candidate is None or current_priority < x_col_candidate_priority:
+                        x_col_candidate = col_name
+                        x_col_candidate_priority = current_priority
+
+                if col_name == 'Y' or col_name == 'y':
+                    y_col_candidate = col_name
+                    y_col_candidate_priority = 0
+                elif col_name.startswith("Y") or col_name.startswith("y"):
+                    current_priority = len(col_name)
+                    if y_col_candidate is None or current_priority < y_col_candidate_priority:
+                        y_col_candidate = col_name
+                        y_col_candidate_priority = current_priority
+                elif col_name == 'Latitude' or col_name == 'latitude':
+                    current_priority = 1
+                    if y_col_candidate is None or current_priority < y_col_candidate_priority:
+                        y_col_candidate = col_name
+                        y_col_candidate_priority = current_priority
+                elif col_name.startswith("Lat") or col_name.startswith("lat"):
+                    current_priority = len(col_name)
+                    if y_col_candidate is None or current_priority < y_col_candidate_priority:
+                        y_col_candidate = col_name
+                        y_col_candidate_priority = current_priority
+
+        if x_col_candidate is not None and y_col_candidate is not None:
+            column_json['lon_column'] = x_col_candidate
+            column_json['lat_column'] = y_col_candidate
+            return json.dumps(column_json)
+
+        return None
 
     def extract_info(self, desc: str) -> str:
         return self._info_extraction_chain.run(

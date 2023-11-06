@@ -1,0 +1,522 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      name="viewport"
+      content="initial-scale=1,maximum-scale=1,user-scalable=no"
+    />
+    <title>
+      Chicago Crime Analysis
+    </title>
+
+    <link
+      rel="stylesheet"
+      href="https://js.arcgis.com/4.27/esri/themes/light/main.css"
+    />
+    <script src="https://js.arcgis.com/4.27/"></script>
+    <script
+      type="module"
+      src="https://js.arcgis.com/calcite-components/1.4.2/calcite.esm.js"
+    ></script>
+    <link
+      rel="stylesheet"
+      type="text/css"
+      href="https://js.arcgis.com/calcite-components/1.4.2/calcite.css"
+    />
+    <style>
+    html,
+    body,
+    #viewDiv {
+      height: 100%;
+      width: 100%;
+      margin: 0;
+      padding: 0;
+      overflow: hidden;
+    }
+
+    .panel-side {
+      padding: 2px;
+      width: 390px;
+      height: 100%;
+      position: absolute;
+      top: 0;
+      right: 0;
+      z-index: 60;
+    }
+
+    .calcite-tutorial {
+      --calcite-ui-brand: #039851;
+      --calcite-ui-brand-hover: #008d52;
+    }
+
+    .calcite-tutorial calcite-chip {
+      --calcite-ui-foreground-2: var(--calcite-ui-brand);
+      --calcite-ui-text-1: white;
+      margin-inline-end: 0.75rem;
+    }
+
+    .calcite-panel-contents {
+      overflow-y: auto;
+      overflow-x: hidden;
+      display: block;
+      height: 100vh;
+    }
+
+    ::-webkit-scrollbar {
+      width: 5px;
+      height: 8px;
+      background-color: #aaa;
+    }
+    ::-webkit-scrollbar-thumb {
+      background: #000;
+    }
+
+    </style>
+  </head>
+
+  <body>
+    <div id="viewDiv"></div>
+    <calcite-panel class="panel-side" id="result-panel">
+
+    <calcite-shell>
+      <calcite-panel heading="Assistant">
+
+        <calcite-panel>
+        <calcite-block
+          heading="Assistant response:"
+          open
+        >
+          <calcite-text-area
+            id="results-text-area"
+            placeholder="Response will be shown here ... "
+            read-only
+            rows=9
+          ></calcite-text-area>
+
+          <calcite-list
+            id="results-table-area"
+            style="border:ridge"
+            hidden
+          >
+          </calcite-list>
+
+        </calcite-block>
+
+      </calcite-panel>
+
+      <calcite-panel>
+        <calcite-block
+          heading="Your question:"
+          open
+        >
+          <calcite-text-area
+              id="message"
+              placeholder="What question do you have today?"
+              rows="5"
+            ></calcite-text-area>
+          <calcite-button id="request-button" style="padding-top: 5px"
+            >Send</calcite-button
+          >
+        </calcite-block>
+      </calcite-panel>
+
+</calcite-panel>
+    </calcite-shell>
+    <script>
+      require([
+        "esri/request",
+        "esri/Map",
+        "esri/views/MapView",
+        "esri/layers/FeatureLayer",
+        "esri/layers/GeoJSONLayer"
+      ],
+      (
+        esriRequest,
+        Map,
+        MapView,
+        FeatureLayer,
+        GeoJSONLayer,
+        uuidv4
+      ) => {
+        const map = new Map({
+          basemap: "gray-vector"
+        });
+
+        const view = new MapView({
+          container: "viewDiv",
+          map: map,
+          padding: {
+            right: 390
+          },
+          center: [-87.623177, 41.881832],
+          zoom: 9,
+          constraints: {
+            geometry: {
+              type: "extent",
+              // xmin: -17206956,
+              // xmax: -4570726,
+              // ymin: 1737191,
+              // ymax: 7421660,
+              xmax:-9744369,
+              xmin:-9795429,
+              ymax:5168310,
+              ymin:5101427,
+              spatialReference: {
+                wkid: 102100
+              }
+            },
+            minZoom: 3
+          }
+        });
+
+        // view.on("drag", function(event){
+        //   console.log(view.extent);
+        // })
+
+        const requestButton = document.getElementById("request-button");
+        const userInput = document.getElementById("message");
+        const responseArea = document.getElementById("results-text-area");
+        const alert = document.getElementById("alert");
+        let url_chat = "http://localhost:8000/chat2/";
+        let url_create_session = "http://localhost:8000/create_session/";
+
+        // Create URLSearchParams and pass it into the esriRequest options query parameter.
+        // This can be a plain object or URLSearchParams object.
+        const urlSearchParams = new URLSearchParams({
+          f: "json"
+        });
+
+        // Create a ReqeuestOptions object with the URLSearchParams as the query parameter.
+        // Other parameters can be specified if needed.
+        const options = {
+          query: urlSearchParams
+        };
+
+        // Function to call esriRequest with async/await.
+        async function makeRequest(url, options) {
+          // Use try/catch for error handling.
+          try {
+            // Use async/await to wait for the response to return
+            // from the service.
+            const response = await esriRequest(url, options);
+            // When the response returns from the service, stringify the response to display
+            // the information in the Text Area component.
+            const responseJSON = JSON.stringify(response, null, 2);
+            responseArea.value = `HTTP Status Code: ${response.httpStatus}\nResponse:\n${responseJSON}`;
+          } catch (error) {
+            // If an error is returned in the response, display the error alongside the http status code.
+            responseArea.value = `${error.details.httpStatus} error: "${error.message}."`;
+          }
+        }
+
+        //
+        session_created = false;
+        function callCreateSession() {
+          // Use the fetch API to send a POST request
+          url_create_session2 = url_create_session + "frank"
+          fetch(url_create_session2, {
+            credentials: 'include',
+            method: 'POST', // Set the HTTP method
+            headers: {
+              'Content-Type': 'application/json' // Set the content type
+            },
+            body: "" // Convert data to JSON string
+          })
+          .then(response => {
+            console.log('Success:', response); // Log the success data
+            session_created = true;
+            callChat2();
+          })
+        };
+
+        function callChat2() {
+          encode_user_msg = encodeURIComponent(userInput.value);
+          // message = 'message=' + encode_user_msg;
+          message = encode_user_msg;
+          console.log(message);
+          postMessage2Chat2(message);
+
+          responseArea.value = "Assistant is working very hard for you! Please wait ... ... "
+          document.getElementById("results-text-area").style.display = "block"
+          document.getElementById("results-table-area").style.display = "none"
+        };
+
+
+        // Make the request on a Button click using the
+        // value of the Input Text component.
+        requestButton.addEventListener("click", () => {
+          // Check if the input text is a valid URL
+          //if (isValidURL(urlInput.value)) {
+            // If the URL is valid, pass in the url and options property
+            // to make the request.
+            // makeRequest(url_chat, options);
+            //for (const pair of inputForm) {
+            //    data.append(pair[0]);
+            //}
+
+            console.log("session_created =>", session_created);
+
+          if (session_created == true) {
+            callChat2();
+          } else {
+            // create cookie
+            callCreateSession();
+          };
+
+          //} else {
+            // If the input is an invalid URL, alert the end user.
+            //alert.open = true;
+            //responseArea.value = "Request response will show here..";
+          //}
+        });
+
+
+        current_dynamic_layer = undefined
+        async function postMessage2Chat2(message) {
+          random_uuid = generate_uuidv4();
+          // post_message = {"id": random_uuid, "message": message};
+          post_message = '{"id":"' + random_uuid + '", "message":"' + message + '"}'
+          console.log(post_message);
+          // Use the fetch API to send a POST request
+          fetch(url_chat, {
+            credentials: 'include',
+            method: 'POST', // Set the HTTP method
+            headers: {
+              'Content-Type': 'application/json' // Set the content type
+            },
+            body: post_message // Convert data to JSON string
+          })
+          .then(response => response.json()) // Parse the response to JSON
+          .then(data => {
+            console.log('Success:', data); // Log the success data
+            responseArea.value = data;
+            // response_json = JSON.parse(data, (key, value) => {
+            //   if (key == 'url') {
+              //   url_polygons = value
+              //   //TODO
+              //   console.log(url_polygons);
+              //   if (current_dynamic_layer != undefined) {
+              //     map.remove(current_dynamic_layer)
+              //   }
+              //   geojsonLayer_polygons = new GeoJSONLayer({
+              //     url: url_polygons,
+              //     copyright: "Chicago Crime Data",
+              //     popupTemplate: template_polygons,
+              //     renderer: renderer_polygons,
+              //     orderBy: {
+              //       field: "count"
+              //     }
+              //   });
+              //   map.add(geojsonLayer_polygons, 0);
+              //   current_dynamic_layer = geojsonLayer_polygons
+              // }
+            //   if (key == 'agent_message') {
+            //       responseArea.value = value
+            //   }
+            // })
+            // console.log(response_json)
+
+            console.log("==========================")
+            parsed_data = JSON.parse(data)
+            console.log(parsed_data['success']);
+
+            response_message_set = false
+            if (parsed_data["success"] == 'True') {
+              if (parsed_data["column_descriptions"] != undefined
+                && parsed_data["column_data_types"] != undefined
+                && parsed_data["samples"] != undefined
+              ) {
+                column_descriptions = parsed_data["column_descriptions"];
+                column_types = parsed_data["column_data_types"];
+                samples = parsed_data["samples"]
+                console.log("got meta data!");
+                // console.log(column_types);
+                // console.log(samples);
+
+                document.getElementById("results-text-area").style.display = "none"
+                document.getElementById("results-table-area").style.display = "block"
+                response_message_set = true;
+
+                list_area = document.getElementById("results-table-area");
+                list_area.innerHTML = '';
+                // add the general message on the top
+                item = document.createElement("calcite-list-item");
+                item.innerHTML='<div slot="content">' + parsed_data['agent_message'] + '</div>';
+                list_area.appendChild(item);
+
+                for (var i=0; i < column_types.length; i++) {
+                  col_name = column_types[i]['name'];
+                  col_type = column_types[i]['type'];
+                  col_desc = column_descriptions[col_name];
+                  console.log(col_desc);
+
+                  sample_values = ''
+                  for (var k=0; k<samples.length; k++) {
+                    sample = samples[k];
+                    sample_value = sample[col_name];
+                    sample_values = sample_values + "<b>Sample-" + (k+1) + ":</b>" + sample_value +"</br>";
+                  }
+
+                  item = document.createElement("calcite-list-item");
+                  item.innerHTML='<div slot="content"><b>Column name: </b><u>' + col_name + "</u>, type: " + col_type +
+                  "</br><b>Description: </b>" + col_desc + '</br>' + sample_values + '</div>';
+                  list_area.appendChild(item);
+                }
+              }
+
+              // show results in map if there is an url attribute.
+              if (parsed_data["url"] != undefined) {
+                url_polygons = parsed_data["url"]
+                //TODO: validate url
+                console.log(url_polygons);
+                if (current_dynamic_layer != undefined) {
+                  map.remove(current_dynamic_layer)
+                }
+                geojsonLayer_polygons = new GeoJSONLayer({
+                  url: url_polygons,
+                  copyright: "Chicago Crime Data",
+                  popupTemplate: template_polygons,
+                  renderer: renderer_polygons,
+                  orderBy: {
+                    field: "count"
+                  }
+                });
+                map.add(geojsonLayer_polygons, 0);
+                current_dynamic_layer = geojsonLayer_polygons
+
+                responseArea.value = parsed_data["agent_message"];
+                response_message_set = true;
+              }
+
+              if (response_message_set == false) {
+                document.getElementById("results-text-area").style.display = "block"
+                document.getElementById("results-table-area").style.display = "none"
+                responseArea.value = parsed_data["agent_message"];
+              }
+            } else {
+              document.getElementById("results-text-area").style.display = "block"
+              document.getElementById("results-table-area").style.display = "none"
+              responseArea.value = parsed_data["agent_message"];
+            };
+
+          })
+          .catch((error) => {
+            console.error('Error:', error); // Log any errors
+            responseArea.value = error
+          });
+        };
+
+        //
+        // Chicago Crime Data Analysis
+        //
+        const template_polygons = {
+          title: "Chicago Crime Info",
+          content: "Count {count}",
+          fieldInfos: [
+            {
+              fieldName: "count",
+            }
+          ]
+        };
+
+        const less5 = {
+          type: "simple-fill", // autocasts as new SimpleFillSymbol()
+          color: "#fffcd4",
+          style: "solid",
+          outline: {
+            width: 0.2,
+            color: [255, 255, 255, 0.5]
+          }
+        };
+
+        const less10 = {
+          type: "simple-fill", // autocasts as new SimpleFillSymbol()
+          color: "#b1cdc2",
+          style: "solid",
+          outline: {
+            width: 0.2,
+            color: [255, 255, 255, 0.5]
+          }
+        };
+
+        const less20 = {
+          type: "simple-fill", // autocasts as new SimpleFillSymbol()
+          color: "#38627a",
+          style: "solid",
+          outline: {
+            width: 0.2,
+            color: [255, 255, 255, 0.5]
+          }
+        };
+
+        const more20 = {
+          type: "simple-fill", // autocasts as new SimpleFillSymbol()
+          color: "#0d2644",
+          style: "solid",
+          outline: {
+            width: 0.2,
+            color: [255, 255, 255, 0.5]
+          }
+        };
+
+        const renderer_polygons = {
+          type: "class-breaks", // autocasts as new ClassBreaksRenderer()
+          field: "count", // total number of adults (25+) with a college degree
+          defaultSymbol: {
+            type: "simple-fill", // autocasts as new SimpleFillSymbol()
+            color: "orange",
+            style: "solid",
+            outline: {
+              width: 0.5,
+              color: [50, 50, 50, 0.6]
+            }
+          },
+          classBreakInfos: [
+          {
+            minValue: 0,
+            maxValue: 5,
+            symbol: less5,
+            label: "< 5" // label for symbol in legend
+          },
+          {
+            minValue: 5,
+            maxValue: 10,
+            symbol: less10,
+            label: "5 - 10" // label for symbol in legend
+          },
+          {
+            minValue: 10,
+            maxValue: 20,
+            symbol: less20,
+            label: "10 - 20" // label for symbol in legend
+          },
+          {
+            minValue: 20,
+            maxValue: 70,
+            symbol: more20,
+            label: "> 20" // label for symbol in legend
+          }
+        ],
+          defaultLabel: "no data" // legend label for features that don't match a class break
+        };
+
+
+      });
+
+      function generate_uuidv4() {
+        var dt = new Date().getTime();
+        return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g,
+          function( c ) {
+            var rnd = Math.random() * 16;//random number in range 0 to 16
+            rnd = (dt + rnd)%16 | 0;
+            dt = Math.floor(dt/16);
+            return (c === 'x' ? rnd : (rnd & 0x3 | 0x8)).toString(16);
+          }
+        );
+      }
+    </script>
+
+  </calcite-panel>
+  </body>
+</html>

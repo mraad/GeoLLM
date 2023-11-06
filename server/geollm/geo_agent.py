@@ -137,7 +137,13 @@ class GeoAgent:
             ts = math.trunc(time.time())
             file_name = f'geojson_{ts}.json'
             geojson_output_file = f'{self._output_dir}/{file_name}'
-            self._geo_llm.create_square_bins(self._df, geojson_output_file, decoded_message)
+            print("use openai function calls: ")
+            print(self._geo_llm.is_openai_function_call_defined())
+            if self._geo_llm.is_openai_function_call_defined():
+                self._geo_llm.create_square_bins_with_function_call(self._df, geojson_output_file, decoded_message)
+            else:
+                self._geo_llm.create_square_bins(self._df, geojson_output_file, decoded_message)
+
             if not os.path.isfile(geojson_output_file):
                 return (f'{{"success": "False", "agent_message":"geo-binning data may have failed '
                         f'since there is no JSON output. Please refine your message and try again!"}}')
@@ -242,18 +248,18 @@ class GeoAgent:
 
         # if there is an existing DataFrame, prefix the user input with
         if self._df is not None:
-            prefix = "message=Given we have an existing DataFrame, "
-            decoded_message = f'{prefix}{decoded_message[8:]}'
+            prefix = f'Given we have an existing DataFrame, {self._df}'
+            decoded_message2 = f'{prefix}, {decoded_message}'
         else:
             # check if the message contains enough info to do the analysis it asks for.
             s3_url = self._get_data_source_url(decoded_message)
-            decoded_message = f'data source: "{s3_url}". {decoded_message}'
+            decoded_message2 = f'data source: "{s3_url}". {decoded_message}'
             if s3_url is None:
                 err_msg = (f'{{"success": "False", "agent_message":"User message does not contain information that '
                            f'matches any existing data source. Please refine your message and try again!"}}')
                 return err_msg
 
-        tools_str = self._geo_llm.select_tool2(decoded_message)
+        tools_str = self._geo_llm.select_tool2(decoded_message2)
         print(f'chat2 tools: {tools_str}')
         err_msg = (f'{{"success": "False", "agent_message":"Could not find a tool matching your description.'
                    f' Please refine your message and try again!"}}')
@@ -270,7 +276,7 @@ class GeoAgent:
             print(f'tool -> {tool}')
             match tool:
                 case 'create_dataframe_from_s3':
-                    response = self._execute_create_dataframe(decoded_message)
+                    response = self._execute_create_dataframe(decoded_message2)
                     response_json = json.loads(response)
                     if response_json['success'] == 'False':
                         return response
@@ -285,7 +291,7 @@ class GeoAgent:
                                f'### Rule 1: If you find nothing related to SQL query, just return empty string.\n'
                                f'### Rule 2: You should NOT generate any SQL query related to '
                                f'spatial and geo binning requirements.  \n'
-                               f'{decoded_message}')
+                               f'{decoded_message2}')
                     response = self._geo_llm.extract_info(message)
                     print(f'extracted SQL query message: {response}')
 
@@ -313,6 +319,8 @@ class GeoAgent:
                                           f'from the given message that requires SQL transformation."}}')
 
                 case 'create_square_bins':
+                    if self._df is not None:
+                        decoded_message = f'Given we have an existing DataFrame, {self._df}, {decoded_message}'
                     final_response = self._execute_create_geo_bins(decoded_message, server_url)
 
         return final_response

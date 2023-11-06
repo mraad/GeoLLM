@@ -12,15 +12,23 @@ from fastapi_sessions.frontends.implementations import SessionCookie, CookiePara
 from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 
-from geollm.geo_agent import GeoAgent, Message
-from geollm.geo_llm import GeoLLM
-
 import glob
 import os
 import time
 
 from pyspark.sql import SparkSession
 from langchain.chat_models import AzureChatOpenAI
+
+# IMPORTANT: these environment variables need to be set before the following import statements!!
+os.environ['openai_api_base'] = "https://esri-openai-ist-dev02.openai.azure.com/"
+os.environ['openai_api_version'] = "2023-07-01-preview"
+os.environ['deployment_name'] = "esri-gpt4-dev"
+os.environ['openai_api_key'] = "d680641de0ac4885b3e7ed8b9066bce8"
+os.environ['openai_api_type'] = "azure"
+os.environ['llm_temperature'] = "0"
+
+from geollm.geo_agent import GeoAgent, Message
+from geollm.geo_llm import GeoLLM
 
 
 class SessionData(BaseModel):
@@ -116,15 +124,16 @@ def create_geo_llm() -> GeoLLM:
 
     # GPT-4
     llm = AzureChatOpenAI(
-        openai_api_base="https://esri-openai-ist-dev02.openai.azure.com/",
-        openai_api_version="2023-07-01-preview",
-        deployment_name="esri-gpt4-dev",
-        openai_api_key="d680641de0ac4885b3e7ed8b9066bce8",
-        openai_api_type="azure",
-        temperature=0,
+        openai_api_base=os.getenv('openai_api_base'),
+        openai_api_version=os.getenv('openai_api_version'),
+        deployment_name=os.getenv('deployment_name'),
+        openai_api_key=os.getenv('openai_api_key'),
+        openai_api_type=os.getenv('openai_api_type'),
+        temperature=os.getenv('llm_temperature'),
     )
 
-    geo_llm = GeoLLM(llm, spark_session=spark.getActiveSession(), enable_cache=False, verbose=True)
+    geo_llm = GeoLLM(llm, openai_function_calls=True, spark_session=spark.getActiveSession(),
+                     enable_cache=False, verbose=True)
     geo_llm.activate()
     return geo_llm
 
