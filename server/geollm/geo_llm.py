@@ -59,48 +59,6 @@ openai.api_version = os.getenv('openai_api_version')
 openai.api_type = os.getenv('openai_api_type')
 openai.api_base = os.getenv('openai_api_base')
 
-# deprecated!
-geo_function_templates = {
-    "create_square_bins":
-        """
-import geofunctions as S
-import pyspark.sql.functions as F
-import geopandas as gp
-
-# this template requires following 5 variables to be included before executing
-# lon_column, lat_column, cell_size, max_count and output_file
-
-# Perform Spatial Binning
-df = (
-    df.select(S.st_lontoq(lon_column, cell_size), S.st_lattor(lat_column, cell_size))
-    .groupBy("q", "r")
-    .count()
-    .select(
-        S.st_qtox("q", cell_size),
-        S.st_rtoy("r", cell_size),
-        "count",
-    )
-    .select(
-        S.st_cell("x", "y", cell_size).alias("geometry"),
-        F.least("count", F.lit(max_count)).alias("count"),
-    )
-    .orderBy("count")
-)
-
-# Create geodataframe to get GeoJSON document
-df = df.toPandas()
-df.geometry = df.geometry.apply(lambda _: bytes(_))
-df.geometry = gp.GeoSeries.from_wkb(df.geometry)
-gdf = gp.GeoDataFrame(df, crs="EPSG:3857")
-gdf = gdf.to_crs(crs="EPSG:4326")
-geo_json = gdf.to_json()
-
-# Write GeoJSON document to local disk
-with open(output_file, 'w') as f:
-    f.write(geo_json)
-    """
-}
-
 
 class GeoLLM:
     _HTTP_HEADER = {
@@ -749,12 +707,6 @@ class GeoLLM:
                 print(f'parameters json => {parameters_json_str}')
 
                 if parameters_json_str is not None:
-                    # direct execute Python code, deprecated!
-                    # check lon_column and lat_column names against Dataframe
-                    # parameters_json_str = self._check_lat_lon_cols(df, parameters_json_str)
-                    # print(f'validated parameters json => {parameters_json_str}')
-                    # self.execute_create_square_bin_python_code(parameters_json_str, output_file, loop_count)
-
                     # use function call. This approach will be very useful if we had to work with a LLM
                     # that does not support function call like GPT-4
                     self.execute_create_square_bin_with_function_call(df, parameters_json_str, output_file, loop_count)
@@ -791,32 +743,6 @@ class GeoLLM:
                 response = None
             else:
                 raise Exception("Could not execute function calls in create_square_bins after 3 tries!")
-
-        return response
-
-    # deprecated
-    def execute_create_square_bin_python_code(self, parameters_json_str: str,
-                                              output_file: str, loop_count: int) -> str | None:
-        parameters_json = json.loads(parameters_json_str)
-        python_code = ''
-        for item in parameters_json:
-            if type(parameters_json[item]) is str:
-                python_code = f'{python_code}\n{item} = "{parameters_json[item]}"'
-            else:
-                python_code = f'{python_code}\n{item} = {parameters_json[item]}'
-
-        python_code = (f'{python_code}\noutput_file = "{output_file}"\n'
-                       f'{geo_function_templates["create_square_bins"]}')
-        print(python_code)
-        try:
-            exec(compile(python_code, "create_square_bins-CodeGen", "exec"))
-            response = "done"
-        except Exception as e:
-            self.log(python_code)
-            if loop_count < 3:
-                response = None
-            else:
-                raise Exception("Could not evaluate Python code in create_square_bins after 3 tries!", e)
 
         return response
 
@@ -889,77 +815,6 @@ class GeoLLM:
             print("No validation function is available and return original parameter json.")
 
         return response
-
-    # deprecated
-    @staticmethod
-    def _check_lat_lon_cols(df: DataFrame, col_json_str: str, cache: bool = True) -> str | None:
-        # first check if the lat/lon columns extracted columns from Dataframe
-        column_json = json.loads(col_json_str)
-        lat_col = column_json['lat_column']
-        lon_col = column_json['lon_column']
-        lat_found = False
-        lon_found = False
-        for name, dtype in df.dtypes:
-            if name == lat_col and (dtype == 'double' or dtype == 'float'):
-                lat_found = True
-            if name == lon_col and (dtype == 'double' or dtype == 'float'):
-                lon_found = True
-        if lat_found and lon_found:
-            return col_json_str
-
-        print(f'try to direct extracting x/y columns from column names and types!')
-        # extracted lat/lon columns not found from Dataframe based on column name and type
-        x_col_candidate = None
-        x_col_candidate_priority = 10000000
-        y_col_candidate = None
-        y_col_candidate_priority = 10000000
-
-        for col_name, col_type in df.dtypes:
-            if col_type == 'double' or col_type == 'float':
-                if col_name == 'X' or col_name == 'x':
-                    x_col_candidate = col_name
-                    x_col_candidate_priority = 0
-                elif col_name.startswith("X") or col_name.startswith("x"):
-                    current_priority = len(col_name)
-                    if x_col_candidate is None or current_priority < x_col_candidate_priority:
-                        x_col_candidate = col_name
-                        x_col_candidate_priority = current_priority
-                elif col_name == 'Longitude' or col_name == 'longitude':
-                    current_priority = 1
-                    if x_col_candidate is None or current_priority < x_col_candidate_priority:
-                        x_col_candidate = col_name
-                        x_col_candidate_priority = current_priority
-                elif col_name.startswith("Lon") or col_name.startswith("lon"):
-                    current_priority = len(col_name)
-                    if x_col_candidate is None or current_priority < x_col_candidate_priority:
-                        x_col_candidate = col_name
-                        x_col_candidate_priority = current_priority
-
-                if col_name == 'Y' or col_name == 'y':
-                    y_col_candidate = col_name
-                    y_col_candidate_priority = 0
-                elif col_name.startswith("Y") or col_name.startswith("y"):
-                    current_priority = len(col_name)
-                    if y_col_candidate is None or current_priority < y_col_candidate_priority:
-                        y_col_candidate = col_name
-                        y_col_candidate_priority = current_priority
-                elif col_name == 'Latitude' or col_name == 'latitude':
-                    current_priority = 1
-                    if y_col_candidate is None or current_priority < y_col_candidate_priority:
-                        y_col_candidate = col_name
-                        y_col_candidate_priority = current_priority
-                elif col_name.startswith("Lat") or col_name.startswith("lat"):
-                    current_priority = len(col_name)
-                    if y_col_candidate is None or current_priority < y_col_candidate_priority:
-                        y_col_candidate = col_name
-                        y_col_candidate_priority = current_priority
-
-        if x_col_candidate is not None and y_col_candidate is not None:
-            column_json['lon_column'] = x_col_candidate
-            column_json['lat_column'] = y_col_candidate
-            return json.dumps(column_json)
-
-        return None
 
     def extract_info(self, desc: str) -> str:
         return self._info_extraction_chain.run(

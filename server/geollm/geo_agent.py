@@ -314,7 +314,7 @@ class GeoAgent:
                     print(f'extracted SQL query message: {response}')
 
                     extract_message = re.findall(pattern, response)
-                    if len(extract_message) > 0:
+                    if len(response.strip().strip('"')) > 0 and len(extract_message) > 0:
                         extract_message = extract_message[0]
                         # in case the transformation is on a possible date column but
                         # the column type is a 'str' or 'int'

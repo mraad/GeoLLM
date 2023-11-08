@@ -19,14 +19,6 @@ import time
 from pyspark.sql import SparkSession
 from langchain.chat_models import AzureChatOpenAI
 
-# IMPORTANT: these environment variables need to be set before the following import statements!!
-os.environ['openai_api_base'] = "https://esri-openai-ist-dev02.openai.azure.com/"
-os.environ['openai_api_version'] = "2023-07-01-preview"
-os.environ['deployment_name'] = "esri-gpt4-dev"
-os.environ['openai_api_key'] = "d680641de0ac4885b3e7ed8b9066bce8"
-os.environ['openai_api_type'] = "azure"
-os.environ['llm_temperature'] = "0"
-
 from geollm.geo_agent import GeoAgent, Message
 from geollm.geo_llm import GeoLLM
 
@@ -90,6 +82,8 @@ verifier = BasicVerifier(
     auth_http_exception=HTTPException(status_code=403, detail="invalid session"),
 )
 
+use_openai_function_call = bool(os.getenv("USE_OPENAI_FUNCTION_CALL"))
+
 
 def create_geo_llm() -> GeoLLM:
     spark_jars = glob.glob(os.path.join(".", "lib", "*.jar"))[0]
@@ -132,8 +126,11 @@ def create_geo_llm() -> GeoLLM:
         temperature=os.getenv('llm_temperature'),
     )
 
-    geo_llm = GeoLLM(llm, openai_function_calls=False, spark_session=spark.getActiveSession(),
-                     enable_cache=False, verbose=True)
+    geo_llm = GeoLLM(llm,
+                     openai_function_calls=use_openai_function_call,
+                     spark_session=spark.getActiveSession(),
+                     enable_cache=False,
+                     verbose=True)
     geo_llm.activate()
     return geo_llm
 
