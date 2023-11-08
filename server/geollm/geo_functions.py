@@ -1,6 +1,8 @@
 import geofunctions as S
 import pyspark.sql.functions as F
 import geopandas as gp
+import json
+
 from pyspark.sql import DataFrame
 
 geo_function_definitions = [
@@ -75,6 +77,82 @@ class GeoFunctions:
         return output_file
 
     def available_functions(self):
+        # the function names listed here must match the names in the geo_function_definitions dictionary!
         return {
             "create_square_bins": self.create_square_bins,
         }
+
+    def available_validation_functions(self):
+        # the function names listed here must match the names in the geo_function_definitions dictionary!
+        return {
+            "create_square_bins": self.validate_lat_lon_columns,
+        }
+
+    def validate_lat_lon_columns(self, parameters_json: str) -> str | None:
+        # first check if the lat/lon columns extracted columns from Dataframe
+        column_json = json.loads(parameters_json)
+        lat_col = column_json['lat_column']
+        lon_col = column_json['lon_column']
+        lat_found = False
+        lon_found = False
+        for name, dtype in self._df.dtypes:
+            if name == lat_col and (dtype == 'double' or dtype == 'float'):
+                lat_found = True
+            if name == lon_col and (dtype == 'double' or dtype == 'float'):
+                lon_found = True
+        if lat_found and lon_found:
+            return parameters_json
+
+        print(f'try to direct extracting x/y columns from column names and types!')
+        # extracted lat/lon columns not found from Dataframe based on column name and type
+        x_col_candidate = None
+        x_col_candidate_priority = 10000000
+        y_col_candidate = None
+        y_col_candidate_priority = 10000000
+
+        for col_name, col_type in self._df.dtypes:
+            if col_type == 'double' or col_type == 'float':
+                if col_name == 'X' or col_name == 'x':
+                    x_col_candidate = col_name
+                    x_col_candidate_priority = 0
+                elif col_name.startswith("X") or col_name.startswith("x"):
+                    current_priority = len(col_name)
+                    if x_col_candidate is None or current_priority < x_col_candidate_priority:
+                        x_col_candidate = col_name
+                        x_col_candidate_priority = current_priority
+                elif col_name == 'Longitude' or col_name == 'longitude':
+                    current_priority = 1
+                    if x_col_candidate is None or current_priority < x_col_candidate_priority:
+                        x_col_candidate = col_name
+                        x_col_candidate_priority = current_priority
+                elif col_name.startswith("Lon") or col_name.startswith("lon"):
+                    current_priority = len(col_name)
+                    if x_col_candidate is None or current_priority < x_col_candidate_priority:
+                        x_col_candidate = col_name
+                        x_col_candidate_priority = current_priority
+
+                if col_name == 'Y' or col_name == 'y':
+                    y_col_candidate = col_name
+                    y_col_candidate_priority = 0
+                elif col_name.startswith("Y") or col_name.startswith("y"):
+                    current_priority = len(col_name)
+                    if y_col_candidate is None or current_priority < y_col_candidate_priority:
+                        y_col_candidate = col_name
+                        y_col_candidate_priority = current_priority
+                elif col_name == 'Latitude' or col_name == 'latitude':
+                    current_priority = 1
+                    if y_col_candidate is None or current_priority < y_col_candidate_priority:
+                        y_col_candidate = col_name
+                        y_col_candidate_priority = current_priority
+                elif col_name.startswith("Lat") or col_name.startswith("lat"):
+                    current_priority = len(col_name)
+                    if y_col_candidate is None or current_priority < y_col_candidate_priority:
+                        y_col_candidate = col_name
+                        y_col_candidate_priority = current_priority
+
+        if x_col_candidate is not None and y_col_candidate is not None:
+            column_json['lon_column'] = x_col_candidate
+            column_json['lat_column'] = y_col_candidate
+            return json.dumps(column_json)
+
+        return None

@@ -39,6 +39,8 @@ class GeoAgent:
         self._output_dir = output_dir
         self._verbose = verbose
         self._tools = ["transform_dataframe", "create_square_bins", "create_dataframe_from_s3"]
+        self._current_s3_url = None
+        self._user_messages = []
         if verbose:
             self._logger = CodeLogger("spark_ai")
 
@@ -54,7 +56,7 @@ class GeoAgent:
         s3_url = re.search(pattern, desc)
         if s3_url:
             s3_url = s3_url.group(0)
-            print(s3_url)
+            # print(s3_url)
             if s3_url[-1] in '.!@#$%^&*()':
                 s3_url = s3_url[:-1]
         else:
@@ -110,6 +112,7 @@ class GeoAgent:
                      f'"Failed to load CSV data from the given url: {s3_url}"}}')
             else:
                 self._df = df
+                self._current_s3_url = s3_url
                 # print(self._geo_llm._get_col_info_json(df.dtypes))
                 if generate_column_description:
                     response = self._geo_llm.analyze_s3_dataset(df)
@@ -243,24 +246,39 @@ class GeoAgent:
         return None
 
     def chat2(self, message: Message, server_url: str) -> str:
-        decoded_message = urllib.parse.unquote(message.message)
-        print(decoded_message)
+        decoded_message = urllib.parse.unquote(message.message).strip()
+        print("chat2() - decoded message: ", decoded_message)
+        print("message cache size: ", len(self._user_messages))
 
-        # if there is an existing DataFrame, prefix the user input with
+        if len(self._user_messages) > 0 and self._user_messages[-1] == decoded_message:
+            return (f'{{"success": "True", '
+                    f'"agent_message":"The input message is identical to the previous one. No action will be taken!"}}')
+
+        # check if the message contains enough info to do the analysis it asks for.
+        s3_url = self._get_data_source_url(decoded_message)
+
+        # if there is an existing DataFrame, prefix the user input with it
         if self._df is not None:
-            prefix = f'Given we have an existing DataFrame, {self._df}'
-            decoded_message2 = f'{prefix}, {decoded_message}'
+            if s3_url is not None and self._current_s3_url == s3_url:
+                prefix = f'Given we have an existing DataFrame, {self._df}'
+                decoded_message2 = f'{prefix}, {decoded_message}'
+            else:
+                # re-load data with new url
+                self._df = None
+                self._user_messages = []
+                decoded_message2 = f'data source: "{s3_url}". {decoded_message}'
         else:
-            # check if the message contains enough info to do the analysis it asks for.
-            s3_url = self._get_data_source_url(decoded_message)
-            decoded_message2 = f'data source: "{s3_url}". {decoded_message}'
-            if s3_url is None:
+            if s3_url is not None:
+                decoded_message2 = f'data source: "{s3_url}". {decoded_message}'
+            else:
                 err_msg = (f'{{"success": "False", "agent_message":"User message does not contain information that '
                            f'matches any existing data source. Please refine your message and try again!"}}')
                 return err_msg
 
+        print("decoded message2 -> ", decoded_message2)
         tools_str = self._geo_llm.select_tool2(decoded_message2)
         print(f'chat2 tools: {tools_str}')
+
         err_msg = (f'{{"success": "False", "agent_message":"Could not find a tool matching your description.'
                    f' Please refine your message and try again!"}}')
         if tools_str is not None:
@@ -320,8 +338,11 @@ class GeoAgent:
 
                 case 'create_square_bins':
                     if self._df is not None:
-                        decoded_message = f'Given we have an existing DataFrame, {self._df}, {decoded_message}'
-                    final_response = self._execute_create_geo_bins(decoded_message, server_url)
+                        decoded_message2 = f'Given we have an existing DataFrame, {self._df}, {decoded_message}'
+                    final_response = self._execute_create_geo_bins(decoded_message2, server_url)
+
+        # we got valid user message, add it to the cache
+        self._user_messages.append(decoded_message)
 
         return final_response
 

@@ -59,6 +59,7 @@ openai.api_version = os.getenv('openai_api_version')
 openai.api_type = os.getenv('openai_api_type')
 openai.api_base = os.getenv('openai_api_base')
 
+# deprecated!
 geo_function_templates = {
     "create_square_bins":
         """
@@ -743,50 +744,97 @@ class GeoLLM:
             response_json_array = re.findall(json_pattern, response)
             print(f'create_square_bins: response_json_array => {response_json_array}')
             if len(response_json_array) > 0:
-                # codeblocks = self._extract_code_blocks(response)
-                # code = "\n".join(codeblocks)
-                # print(code)
                 # check lon_column and lat_column names against Dataframe
-                parameters_json = self._check_lat_lon_cols(df, response_json_array[0])
-                print(f'parameter json => {parameters_json}')
-                code_json = json.loads(parameters_json)
-                python_code = ''
-                for item in code_json:
-                    if type(code_json[item]) is str:
-                        python_code = f'{python_code}\n{item} = "{code_json[item]}"'
-                    else:
-                        python_code = f'{python_code}\n{item} = {code_json[item]}'
+                parameters_json_str = response_json_array[0]
+                print(f'parameters json => {parameters_json_str}')
 
-                python_code = (f'{python_code}\noutput_file = "{output_file}"\n'
-                               f'{geo_function_templates["create_square_bins"]}')
-                print(python_code)
-                try:
-                    exec(compile(python_code, "create_square_bins-CodeGen", "exec"))
-                except Exception as e:
-                    self.log(python_code)
-                    if loop_count < 3:
-                        response = None
-                    else:
-                        raise Exception("Could not evaluate Python code in create_square_bins after 3 tries!", e)
+                if parameters_json_str is not None:
+                    # direct execute Python code, deprecated!
+                    # check lon_column and lat_column names against Dataframe
+                    # parameters_json_str = self._check_lat_lon_cols(df, parameters_json_str)
+                    # print(f'validated parameters json => {parameters_json_str}')
+                    # self.execute_create_square_bin_python_code(parameters_json_str, output_file, loop_count)
+
+                    # use function call. This approach will be very useful if we had to work with a LLM
+                    # that does not support function call like GPT-4
+                    self.execute_create_square_bin_with_function_call(df, parameters_json_str, output_file, loop_count)
+                else:
+                    response = None
             else:
                 response = None
 
-    @staticmethod
-    def create_square_bins_with_function_call(
-            df: DataFrame, output_file: str, desc: Optional[str] = None, cache: bool = True
-    ) -> None:
+    def execute_create_square_bin_with_function_call(self, df: DataFrame, parameters_json_str: str,
+                                                     output_file: str, loop_count: int) -> str | None:
+        response = "ok"
+        # add output_file to the parameter list.
+        parameters_json_combined_str = f'{parameters_json_str.strip()[0:-1]},"output_file":"{output_file}"}}'
+        print(parameters_json_combined_str)
+
+        callable_geo_functions = GeoFunctions(df)
+        available_geo_functions = callable_geo_functions.available_functions()
+        available_validation_functions = callable_geo_functions.available_validation_functions()
+        # print(geo_function_definitions)
+
+        function_name = "create_square_bins"
+        parameters_json_combined_str = self.validate_parameters(function_name, parameters_json_combined_str,
+                                                                available_validation_functions)
+
+        try:
+            function_to_call = available_geo_functions[function_name]
+            function_args = json.loads(parameters_json_combined_str)
+            function_response = function_to_call(**function_args)
+            print(function_response)
+            if os.path.isfile(output_file):
+                response = function_response
+        except KeyError:
+            if loop_count < 3:
+                response = None
+            else:
+                raise Exception("Could not execute function calls in create_square_bins after 3 tries!")
+
+        return response
+
+    # deprecated
+    def execute_create_square_bin_python_code(self, parameters_json_str: str,
+                                              output_file: str, loop_count: int) -> str | None:
+        parameters_json = json.loads(parameters_json_str)
+        python_code = ''
+        for item in parameters_json:
+            if type(parameters_json[item]) is str:
+                python_code = f'{python_code}\n{item} = "{parameters_json[item]}"'
+            else:
+                python_code = f'{python_code}\n{item} = {parameters_json[item]}'
+
+        python_code = (f'{python_code}\noutput_file = "{output_file}"\n'
+                       f'{geo_function_templates["create_square_bins"]}')
+        print(python_code)
+        try:
+            exec(compile(python_code, "create_square_bins-CodeGen", "exec"))
+            response = "done"
+        except Exception as e:
+            self.log(python_code)
+            if loop_count < 3:
+                response = None
+            else:
+                raise Exception("Could not evaluate Python code in create_square_bins after 3 tries!", e)
+
+        return response
+
+    def create_square_bins_with_function_call(self, df: DataFrame, output_file: str,
+                                              desc: Optional[str] = None, cache: bool = True) -> None:
         # assert DataFrame is not None
         if df is None:
             raise Exception("Could not perform geo-binning!", "The required PySpark DataFrame is not defined!")
 
         instruction = f"{desc} with geojson output file at {output_file}" if desc is not None else ""
-        # tags = self._get_tags(cache)
+        tags = self._get_tags(cache)
 
         response = None
         loop_count = 0
 
         callable_geo_functions = GeoFunctions(df)
         available_geo_functions = callable_geo_functions.available_functions()
+        available_validation_functions = callable_geo_functions.available_validation_functions()
         # print(geo_function_definitions)
 
         while response is None and loop_count < 3:
@@ -814,7 +862,10 @@ class GeoLLM:
                 function_name = response_message["function_call"]["name"]
                 try:
                     function_to_call = available_geo_functions[function_name]
-                    function_args = json.loads(response_message["function_call"]["arguments"])
+                    arguments_json = response_message["function_call"]["arguments"]
+                    arguments_json = self.validate_parameters(function_name, arguments_json,
+                                                              available_validation_functions)
+                    function_args = json.loads(arguments_json)
                     function_response = function_to_call(**function_args)
                     # print(function_response)
                     if os.path.isfile(output_file):
@@ -826,6 +877,20 @@ class GeoLLM:
                     else:
                         raise Exception("Could not execute function calls in create_square_bins after 3 tries!")
 
+    @staticmethod
+    def validate_parameters(function_name: str, arguments_json: str,
+                            available_validation_functions: Dict) -> str | None:
+        print("calling parameter validation")
+        response = arguments_json
+        try:
+            validation_function_to_call = available_validation_functions[function_name]
+            response = validation_function_to_call(parameters_json=arguments_json)
+        except KeyError:
+            print("No validation function is available and return original parameter json.")
+
+        return response
+
+    # deprecated
     @staticmethod
     def _check_lat_lon_cols(df: DataFrame, col_json_str: str, cache: bool = True) -> str | None:
         # first check if the lat/lon columns extracted columns from Dataframe

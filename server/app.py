@@ -92,7 +92,7 @@ verifier = BasicVerifier(
 
 
 def create_geo_llm() -> GeoLLM:
-    spark_jars = glob.glob(os.path.join("../", "lib", "*.jar"))[0]
+    spark_jars = glob.glob(os.path.join(".", "lib", "*.jar"))[0]
 
     aws_access_key = os.environ["AWS_ACCESS_KEY"]
     aws_secret_key = os.environ["AWS_SECRET_KEY"]
@@ -132,7 +132,7 @@ def create_geo_llm() -> GeoLLM:
         temperature=os.getenv('llm_temperature'),
     )
 
-    geo_llm = GeoLLM(llm, openai_function_calls=True, spark_session=spark.getActiveSession(),
+    geo_llm = GeoLLM(llm, openai_function_calls=False, spark_session=spark.getActiveSession(),
                      enable_cache=False, verbose=True)
     geo_llm.activate()
     return geo_llm
