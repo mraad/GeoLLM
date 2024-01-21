@@ -1,38 +1,24 @@
 name: geollm
 channels:
-  - pytorch
   - conda-forge
 dependencies:
   - python<3.11
   - python-multipart>=0.0.6
-  - fastapi>=0.101.1
+  - fastapi>0.101.1
   - jupyter>=1.0
   - jupyterlab>4.0
   - nodejs>16.14
   - geopandas>0.12.2
   - contextily>1.1
   - ipyleaflet>0.17.2
-  - networkx>2.6
-  - scikit-learn>1.0
-  - gdal>3.6
+  - gdal>3.8
   - pyarrow>1.0
   - black>22.10.0
   - blackd>22.10.0
   - isort>5.10.1
   - jupyterlab_code_formatter>1.6.1
-  - mamba>1.0.0
-  - datashader>=0.15.0
-  - holoviews>1.15.4
-  - bokeh>2.4.3
-  - numba>0.57.0
-  - numpy>1.23.5
-  - optuna>=3.2.0
-  - statsmodels>=0.14.0
-  - pyspark>3.4.0
-  - pytorch::pytorch
-  - pytorch::torchvision
+  - langchain>=0.0.190
+  - pyspark>3.4.0,<3.5.0
   - pip
   - pip:
       - fastapi-sessions>=0.3.2
-      - pyspark-ai
-      - plotly-express
