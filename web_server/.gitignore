@@ -1,9 +1,0 @@
-
-node_modules
-package-lock.json
-dist
-
-# Editor directories and files
-.vscode/*
-.idea
-.DS_Store
