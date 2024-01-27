@@ -1,24 +1,32 @@
 name: geollm
 channels:
   - conda-forge
+  - pytorch
 dependencies:
-  - python<3.11
-  - python-multipart>=0.0.6
-  - fastapi>0.101.1
+  - python>3.10,<3.12
   - jupyter>=1.0
-  - jupyterlab>4.0
+  - jupyterlab>=4.0.11
+  - ipywidgets>=8.1.1
   - nodejs>16.14
-  - geopandas>0.12.2
-  - contextily>1.1
-  - ipyleaflet>0.17.2
-  - gdal>3.8
-  - pyarrow>1.0
   - black>22.10.0
   - blackd>22.10.0
   - isort>5.10.1
   - jupyterlab_code_formatter>1.6.1
-  - langchain>=0.0.190
-  - pyspark>3.4.0,<3.5.0
+  - langchain>=0.1.0
+  - transformers>=4.35.2
+  - openai>=1.6.1
+  - bs4>=4.12.2
+  - tiktoken>=0.5.2
+  - deepdiff>=6.7.1
+  - pydantic
+  - numpydoc
+  - faiss-cpu
+  - accelerate>=0.26.1
+  - numexpr>=2.8.8
+  - ollama
   - pip
   - pip:
-      - fastapi-sessions>=0.3.2
+      - langchainhub
+      - langchain-mistralai
+      - langchain-openai
+      - langchain-experimental

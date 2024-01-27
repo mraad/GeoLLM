@@ -1,47 +1,41 @@
 # GeoLLM
 
-## Create Conda Env using [mamba](https://github.com/mamba-org/mamba).
+Demo of [ReAct](https://python.langchain.com/docs/modules/agents/agent_types/react) pseudo geospatial logic with [Ollama](https://ollama.ai/).
+
+## Create Conda Env
 
 ```shell
-mamba update -n base -c conda-forge conda mamba
-
-mamba deactivate
-mamba remove --yes --all --name geollm
+conda deactivate
+conda remove --yes --all --name geollm
 git clone https://github.com/mraad/GeoLLM.git
 cd GeoLLM
-mamba env create
-mamba activate geollm
-pip install lib/geofunctions-0.5-py3-none-any.whl
+conda env create
+conda activate geollm
 ```
 
-### Add 2 additional jar files to the geollm environment 
+### Ollama
 
-To run the demo, we need to access CSV files from AWS S3 buckets. Download these two jar files, hadoop-aws-3.3.4.jar 
-and aws-java-sdk-bundle-1.12.262.jar and put them into the following folder (assume you installed mamba in your home folder):
-```
-~/mambaforge/envs/geollm/lib/python3.10/site-packages/pyspark/jars
-```
-
-### In Docker
-
+[Download](https://ollama.ai/download) and start ollama:
 ```shell
-conda update -c conda-forge conda mamba
-conda create --name streamlit "python<3.11"
-mamba install -c conda-forge langchain streamlit openai
+ollama server
 ```
 
-create ~/.streamlit/config.toml:
+Pull [mistral](https://ollama.ai/library/mistral) model:
+```shell
+ollama pull mistral
+```
 
-```toml
-[browser]
-serverAddress = "0.0.0.0"
+Start jupyter lab:
+```shell
+jupyter lab
 ```
 
 ### References:
 
+- https://ollama.ai/
+- https://python.langchain.com/docs/modules/agents/agent_types/react
 - https://learnlangchain.streamlit.app/
 - https://docs.featureform.com/llms-embeddings-and-vector-databases/building-a-chatbot-with-openai-and-a-vector-database
 - https://github.com/RoboCoachTechnologies/GPT-Synthesizer
 - https://github.com/facebookresearch/codellama
-- https://www.youtube.com/watch?v=K1ubfebTFTk
 - https://levelup.gitconnected.com/you-can-now-build-a-chatbot-to-talk-to-your-internal-knowledge-base-b6066cacf2d5
